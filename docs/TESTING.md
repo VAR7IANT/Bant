@@ -1,0 +1,54 @@
+# Testing
+
+Three layers, kept strictly apart. **None of them modifies the machine running the tests.**
+
+| Layer | Where | What it proves | What it cannot prove |
+|---|---|---|---|
+| **Unit** | `tests/unit` | Logic and orchestration against `FakeHost` (a temp root that fakes `systemctl`, `sshd`, `ss`, `ufw`, `fail2ban-client`, `/proc`). The *generated rollback script* is executed for real with stubbed system commands. | Behaviour of the real daemons |
+| **Integration / system** | `tests/integration`, `tests/system` | Bant's parser and generated config against the **real** `sshd -t/-T` and `fail2ban-client -t/-d` on throwaway directories; `install.sh` under `DESTDIR`; the launcher; a TUI session on a real pty; shellcheck of every shell script including the generated rollback script. | Real network, real systemd, real firewalls |
+| **Real-VPS acceptance** | manual, below | End-to-end behaviour on a disposable server | - |
+
+```bash
+pytest tests/unit                                                    # no privileges
+sudo -E env "PATH=$PATH" pytest tests/integration tests/system       # needs openssh-server + fail2ban installed
+```
+
+CI (`.github/workflows/ci.yml`) runs lint, shellcheck, unit tests on Ubuntu 22.04/24.04 x Python
+3.10-3.13, and the integration layer on Ubuntu 24.04. It starts no services and changes no SSH or
+firewall configuration on the runner.
+
+## Real-VPS acceptance checklist (NOT yet executed)
+
+Use a **disposable** VPS per distribution (Debian 12, Debian 13, Ubuntu 22.04, Ubuntu 24.04), with
+console access. Record results in the release notes before tagging anything stable.
+
+**Install**
+- [ ] `sudo bash install.sh` finishes; `bant` is in PATH; summary says migration *pending*
+- [ ] `ss -ltn` shows 22 **and** 667; `bant status` shows a countdown
+- [ ] Re-run `install.sh`: no duplicate rules/units/directives; still one transaction
+
+**Migration**
+- [ ] New session `ssh -p 667` works; `sudo bant ssh confirm` succeeds; 22 stops listening; existing sessions survive
+- [ ] Same flow on Ubuntu 24.04 with `ssh.socket` (socket drop-in) and on a host with a custom `Port 2222`
+- [ ] Do nothing for the deadline: SSH returns to the original state; repeat with `kill -9` of the installer and with a reboot before the deadline
+- [ ] Provider firewall closed on 667: confirm fails, rollback restores
+- [ ] Port 667 occupied by `nc -l 667`: refused with explanation
+- [ ] Confirm from the *old* session without a new login: refused
+- [ ] ufw active / firewalld active / nftables default-drop / iptables default-drop: 667 reachable, rule removable with `bant firewall remove 667`, admin rules untouched
+
+**Authentication**
+- [ ] `password off` refused when logged in with a password; accepted after a key login; new key session needed to confirm; password login then fails
+- [ ] `password on` works even if `50-cloud-init.conf` says `no`
+- [ ] `root` policy changes reflected in `sshd -T`
+
+**Fail2ban**
+- [ ] 6 bad passwords from another host produce a ban (`fail2ban-client status sshd`), IPv4 and IPv6; unban works
+- [ ] Journald-only server (no `/var/log/auth.log`) and rsyslog server both detect failures
+- [ ] An existing custom jail and `jail.local` are untouched; conflicting `[sshd]` keys are reported
+
+**Coexistence**
+- [ ] With Docker, sing-box/Xray (TCP+UDP), Caddy running: no connectivity change, no rule or sysctl changes (compare `nft list ruleset`, `iptables-save`, `sysctl -a` before/after, ignoring Bant's own entries)
+
+**Lifecycle**
+- [ ] `backup`/`restore` round trip; `repair`; `uninstall` leaves SSH on 667, Fail2ban active, only Bant rules removed
+- [ ] `emergency-recovery.sh rollback|restore-ssh|open-port` from the provider console
