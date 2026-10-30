@@ -67,7 +67,27 @@ Commands while a migration is pending: `bant status`, `sudo bant ssh confirm`,
 **Not supported automatically** (Bant explains and stops): `ListenAddress` lines that pin a port
 (`ListenAddress 1.2.3.4:22`) outside socket-activation mode.
 
+## Language
+
+The first time you open the menu (`sudo bant`) Bant asks which language to use - **English** or **繁體中文** - and remembers it
+(`/etc/bant/bant.toml` when run as root, otherwise a personal preference in `~/.config/bant/language`). Change it later from menu item
+12, with `sudo bant lang zh|en`, or for one run with `--lang zh` / `BANT_LANG=zh`. `--json` output is always English. On a terminal that
+is not UTF-8 (e.g. the Linux text console, `TERM=linux`) Bant shows English instead of garbled characters.
+
 ## Upgrade
+
+**From Bant 0.1.1 on**, Bant updates itself:
+
+```bash
+sudo bant self-update        # checks GitHub, shows what is new, asks before installing
+sudo bant self-update rollback   # if the new version misbehaves
+```
+
+The installer enables a daily *check* (never an install); the dashboard then shows "Bant x.y.z is available". See
+[SECURITY.md](SECURITY.md#self-update) for how downloads are verified. Releases are published by the maintainers, see
+[RELEASING.md](RELEASING.md).
+
+**From a version older than 0.1.1** (which has no `self-update`) do one manual upgrade, after which the above applies:
 
 ```bash
 cd Bant && git pull && sudo bash install.sh

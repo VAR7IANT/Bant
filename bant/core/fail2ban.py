@@ -514,7 +514,7 @@ def set_enabled(ctx: Context, enable: bool) -> str:
             if not res.ok:
                 raise OperationFailed(f"Could not enable fail2ban: {res.output}")
             ctx.audit("fail2ban.enable")
-            return msg + "; Fail2ban enabled and SSH jail configured"
+            return f"{msg}; Fail2ban enabled and SSH jail configured"
         if not installed(ctx)[0]:
             return "Fail2ban is not installed"
         res = ctx.run_mut(["systemctl", "disable", "--now", "fail2ban.service"])

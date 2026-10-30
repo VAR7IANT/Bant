@@ -9,7 +9,7 @@ import sys
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from bant import __version__
+from bant import __version__, i18n
 from bant.context import Context
 from bant.core import (
     backups,
@@ -26,6 +26,7 @@ from bant.core import (
     ssh,
     status,
     uninstall,
+    updater,
     updates,
 )
 from bant.core.rollback import TxManager
@@ -39,6 +40,7 @@ from bant.errors import (
     UsageError,
     ValidationError,
 )
+from bant.i18n import tr
 from bant.presenters import (
     fmt_ts,
     render_doctor,
@@ -52,7 +54,7 @@ from bant.presenters import (
     render_status,
     render_updates,
 )
-from bant.ui import UI, Abort
+from bant.ui import UI, Abort, stream_shows_cjk
 from bant.utils.validation import (
     parse_duration,
     parse_int_range,
@@ -69,33 +71,52 @@ Handler = Callable[[argparse.Namespace, Context, UI], int]
 # Parser
 # ---------------------------------------------------------------------------
 
+class _Parser(argparse.ArgumentParser):
+    """ArgumentParser whose help texts are translated into the active interface language."""
+
+    def __init__(self, *args, **kwargs):
+        want_help = kwargs.pop("add_help", True)
+        super().__init__(*args, add_help=False, **kwargs)
+        if want_help:
+            self.add_argument("-h", "--help", action="help", default=argparse.SUPPRESS, help="show this help message and exit")
+
+    def add_argument(self, *args, help=None, **kwargs):  # noqa: A002 - argparse's own parameter name
+        return super().add_argument(*args, help=tr(help) if help else help, **kwargs)
+
+    def add_argument_group(self, title=None, *args, **kwargs):
+        return super().add_argument_group(tr(title) if title else title, *args, **kwargs)
+
+
 def _common() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(add_help=False)
+    p = _Parser(add_help=False)
     g = p.add_argument_group("global options")
     g.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="machine-readable JSON output")
     g.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS,
                    help="show what would change without changing anything")
     g.add_argument("-y", "--yes", action="store_true", default=argparse.SUPPRESS, help="assume yes for confirmations")
     g.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS, help="disable colours")
+    g.add_argument("--lang", choices=sorted(i18n.LANGS), default=argparse.SUPPRESS, help="interface language for this run (en, zh)")
     return p
 
 
 def build_parser() -> argparse.ArgumentParser:
     common = _common()
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="bant", parents=[common], formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Bant - lightweight Linux VPS security manager.\n\nRun `sudo bant` with no arguments for the interactive menu.",
-        epilog="Docs: https://github.com/VAR7IANT/Bant  |  Lost access? See docs/RECOVERY.md",
+        description=tr("Bant - lightweight Linux VPS security manager.") + "\n\n" + tr("Run `sudo bant` with no arguments for the interactive menu."),
+        epilog=tr("Docs: https://github.com/VAR7IANT/Bant  |  Lost access? See docs/RECOVERY.md"),
     )
-    parser.add_argument("--version", action="version", version=f"bant {__version__}")
+    parser.add_argument("--version", action="version", version=f"bant {__version__}", help="show program's version number and exit")
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
     def add(name: str, help_: str, handler: Handler, **kw: Any) -> argparse.ArgumentParser:
-        sp = sub.add_parser(name, parents=[common], help=help_, description=help_, **kw)
+        sp = sub.add_parser(name, parents=[common], help=tr(help_), description=tr(help_), **kw)
         sp.set_defaults(handler=handler)
         return sp
 
     add("version", "show the Bant version", cmd_version)
+    p = add("lang", "show or set the interface language (English / 繁體中文)", cmd_lang)
+    p.add_argument("code", nargs="?", choices=sorted(i18n.LANGS), help="en or zh")
     p = add("status", "security overview (read-only)", cmd_status)
     p.add_argument("--deep", action="store_true", help="include slower checks (update simulation, log scans)")
     add("doctor", "deep diagnostics: installed vs running vs verified", cmd_doctor)
@@ -112,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     ssub = ssh_p.add_subparsers(dest="ssh_cmd", metavar="<action>")
 
     def sadd(name: str, help_: str, handler: Handler) -> argparse.ArgumentParser:
-        sp = ssub.add_parser(name, parents=[common], help=help_, description=help_)
+        sp = ssub.add_parser(name, parents=[common], help=tr(help_), description=tr(help_))
         sp.set_defaults(handler=handler)
         return sp
 
@@ -137,7 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
     fsub = f_p.add_subparsers(dest="f2b_cmd", metavar="<action>")
 
     def fadd(name: str, help_: str, handler: Handler) -> argparse.ArgumentParser:
-        sp = fsub.add_parser(name, parents=[common], help=help_, description=help_)
+        sp = fsub.add_parser(name, parents=[common], help=tr(help_), description=tr(help_))
         sp.set_defaults(handler=handler)
         return sp
 
@@ -167,7 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     wsub = w_p.add_subparsers(dest="fw_cmd", metavar="<action>")
 
     def wadd(name: str, help_: str, handler: Handler) -> argparse.ArgumentParser:
-        sp = wsub.add_parser(name, parents=[common], help=help_, description=help_)
+        sp = wsub.add_parser(name, parents=[common], help=tr(help_), description=tr(help_))
         sp.set_defaults(handler=handler)
         return sp
 
@@ -198,7 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     usub = u_p.add_subparsers(dest="upd_cmd", metavar="<action>")
     for name, h, fn in (("status", "show update state", cmd_updates_status), ("enable", "enable automatic security updates", cmd_updates_enable),
                         ("disable", "remove Bant's update settings", cmd_updates_disable)):
-        usub.add_parser(name, parents=[common], help=h, description=h).set_defaults(handler=fn)
+        usub.add_parser(name, parents=[common], help=tr(h), description=tr(h)).set_defaults(handler=fn)
 
     p = add("backup", "back up Bant-relevant configuration", cmd_backup)
     p.add_argument("--note", default="manual")
@@ -210,8 +231,30 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("setup", "first-run setup: baseline, Fail2ban, SSH migration (used by install.sh)", cmd_setup)
     p.add_argument("--no-ssh-migration", action="store_true")
     p.add_argument("--no-fail2ban", action="store_true")
+    p.add_argument("--no-update-check", action="store_true", help="do not enable the daily check for new Bant releases")
     p.add_argument("--ssh-port", help="SSH port to use: a number, or 'random' (default: random free port, or keep an existing custom port)")
     p.add_argument("--minutes", type=int)
+    su_p = add("self-update", "check for and install Bant updates (default: check, then offer to install)", cmd_selfupdate)
+    su_p.add_argument("--quiet", action="store_true", help="print only when an update is available or something fails")
+    susub = su_p.add_subparsers(dest="su_cmd", metavar="<action>")
+
+    def suadd(name: str, help_: str, handler: Handler) -> argparse.ArgumentParser:
+        sp = susub.add_parser(name, parents=[common], help=tr(help_), description=tr(help_))
+        sp.set_defaults(handler=handler)
+        return sp
+
+    sp = suadd("check", "look for a newer release (read-only)", cmd_su_check)
+    sp.add_argument("--quiet", action="store_true", help="print only when an update is available or something fails")
+    sp = suadd("apply", "download, verify and install the newest (or a given) release", cmd_su_apply)
+    sp.add_argument("--version", help="install this release instead of the newest, e.g. 0.2.0")
+    sp.add_argument("--allow-downgrade", action="store_true", help="allow installing an older release")
+    suadd("rollback", "switch back to the previously installed version", cmd_su_rollback)
+    suadd("status", "installed version, channel, last check, daily check state", cmd_su_status)
+    sp = suadd("notify", "turn the daily update CHECK (never an install) on or off", cmd_su_notify)
+    sp.add_argument("value", choices=["on", "off"])
+    sp = suadd("channel", "which releases count: auto, stable or prerelease", cmd_su_channel)
+    sp.add_argument("value", choices=list(updater.CHANNELS))
+
     p = add("uninstall", "remove Bant safely (SSH port and Fail2ban settings are kept)", cmd_uninstall)
     p.add_argument("--purge", action="store_true", help="also delete backups, logs and configuration")
     p.add_argument("--remove-fail2ban-config", action="store_true")
@@ -262,7 +305,21 @@ def _json_default(obj: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 def cmd_version(args, ctx, ui) -> int:
-    emit(args, ui, {"name": "bant", "version": __version__}, lambda: ui.text(f"bant {__version__}"))
+    emit(args, ui, {"name": "bant", "version": __version__}, lambda: ui.text(f"bant {__version__}", raw=True))
+    return EX_OK
+
+
+def cmd_lang(args, ctx, ui) -> int:
+    if args.code is None:
+        code, source = i18n.resolve(ctx)
+        shown = code or i18n.locale_hint() or i18n.DEFAULT
+        emit(args, ui, {"language": shown, "source": source},
+             lambda: ui.kv([("Language", f"{i18n.LANGS[shown]} ({shown})", "ok"), ("Chosen via", source, None)]))
+        return EX_OK
+    where = i18n.save(ctx, args.code)
+    i18n.set_language(args.code if stream_shows_cjk(ui.stream) or args.code == "en" else "en")
+    emit(args, ui, {"language": args.code, "saved": where},
+         lambda: ui.success("Language set to English." if args.code == "en" else "語言已設定為繁體中文。"))
     return EX_OK
 
 
@@ -296,7 +353,7 @@ def cmd_logs(args, ctx, ui) -> int:
         emit(args, ui, recs, lambda: render_logs(ui, recs))
     else:
         lines = logs.read_lines(ctx, args.source, args.lines, args.grep)
-        emit(args, ui, lines, lambda: [ui.text(" " + ln) for ln in lines] or ui.info("  (no entries)"))
+        emit(args, ui, lines, lambda: [ui.text(" " + ln, raw=True) for ln in lines] or ui.info("  (no entries)"))
     return EX_OK
 
 
@@ -313,9 +370,9 @@ def _print_port_plan(ui: UI, p: migration.PortPlan) -> None:
     for s in p.steps:
         ui.bullet(s)
     for w in p.warnings:
-        ui.text(f" ! {w}", "warn")
+        ui.text(f" ! {tr(w)}", "warn", raw=True)
     for b in p.blockers:
-        ui.text(f" {ui.glyph('bad')} {b}", "bad")
+        ui.text(f" {ui.glyph('bad')} {tr(b)}", "bad", raw=True)
 
 
 def cmd_ssh_port(args, ctx, ui) -> int:
@@ -484,7 +541,8 @@ def cmd_ban(args, ctx, ui) -> int:
     if permanent or custom or getattr(args, "_from_fw", False):
         dur = None if permanent or not custom else parse_duration(custom)
         entry = bans.block(ctx, ip, duration=dur, reason=args.reason)
-        emit(args, ui, entry, lambda: (ui.success(f"Blocked {ip} in Bant's nftables table " + ("permanently" if not dur else f"for {custom}")), _plan_footer(ctx, ui)))
+        done = f"Blocked {ip} in Bant's nftables table permanently." if not dur else f"Blocked {ip} in Bant's nftables table for {custom}."
+        emit(args, ui, entry, lambda: (ui.success(done), _plan_footer(ctx, ui)))
         return EX_OK
     if "/" in ip:
         raise ValidationError("Fail2ban bans take a single address; use --permanent or --duration for networks.")
@@ -610,8 +668,9 @@ def cmd_restore(args, ctx, ui) -> int:
 
 def cmd_repair(args, ctx, ui) -> int:
     actions = repair.run(ctx)
-    emit(args, ui, actions, lambda: ([ui.text(f" {ui.glyph('ok' if a['result'] == 'ok' else 'warn')} {a['action']}" + ("" if a["result"] == "ok" else f" - {a['result']}"),
-                                              "ok" if a["result"] == "ok" else "warn") for a in actions], _plan_footer(ctx, ui)))
+    emit(args, ui, actions, lambda: ([ui.text(f" {ui.glyph('ok' if a['result'] == 'ok' else 'warn')} {tr(a['action'])}"
+                                              + ("" if a["result"] == "ok" else f" - {tr(a['result'])}"),
+                                              "ok" if a["result"] == "ok" else "warn", raw=True) for a in actions], _plan_footer(ctx, ui)))
     return EX_ERROR if any("FAILED" in a["result"] for a in actions) else EX_OK
 
 
@@ -643,7 +702,8 @@ def cmd_setup(args, ctx, ui) -> int:
     if port is None and migrate and sys.stdin.isatty() and not getattr(args, "yes", False) and not getattr(args, "json", False) \
             and not TxManager(ctx).pending():
         port = _ask_ssh_port(ctx, ui)
-    report = setup.run(ctx, migrate=migrate, with_fail2ban=not args.no_fail2ban, port=port, minutes=args.minutes)
+    report = setup.run(ctx, migrate=migrate, with_fail2ban=not args.no_fail2ban, port=port, minutes=args.minutes,
+                       update_check=not args.no_update_check)
     emit(args, ui, report, lambda: render_setup(ui, report))
     return EX_OK if report["outcome"] in ("complete", "pending_confirmation") else EX_ERROR
 
@@ -653,10 +713,10 @@ def cmd_uninstall(args, ctx, ui) -> int:
     inv = uninstall.inventory(ctx)
     if not getattr(args, "json", False):
         ui.heading("UNINSTALL BANT")
-        ui.table(["Kind", "Item", "Action"], [[i["kind"], i["item"], i["action"]] for i in inv])
+        ui.table(["Kind", "Item", "Action"], [[tr(i["kind"]), i["item"], tr(i["action"])] for i in inv])
         ui.info(" Bant will NOT revert SSH to port 22, remove the working listener, or uninstall Fail2ban.")
     if args.dry_run:
-        ctx.planned += [f"{i['action']}: {i['item']}" for i in inv]
+        ctx.planned += [f"{tr(i['action'])}: {i['item']}" for i in inv]
         _plan_footer(ctx, ui)
         return EX_OK
     if not _need_confirm(args, ui, "Proceed with uninstall?"):
@@ -678,6 +738,95 @@ def cmd_uninstall(args, ctx, ui) -> int:
     return EX_OK
 
 
+def _print_update_info(ui: UI, info: dict[str, Any]) -> None:
+    from bant.presenters import render_update_info
+
+    render_update_info(ui, info)
+
+
+def cmd_selfupdate(args, ctx, ui) -> int:
+    if getattr(args, "su_cmd", None):  # a subcommand was given; argparse already routed it
+        return EX_OK
+    info = updater.check(ctx)
+    if getattr(args, "quiet", False) and not info["available"]:
+        return EX_OK
+    emit(args, ui, info, lambda: _print_update_info(ui, info))
+    if not info["available"] or getattr(args, "json", False):
+        return EX_OK
+    if not ctx.is_root:
+        ui.info("Run with sudo to install it: sudo bant self-update")
+        return EX_OK
+    if not _need_confirm(args, ui, f"Install Bant {info['latest']} now?", True):
+        return EX_ERROR
+    return cmd_su_apply(argparse.Namespace(version=None, allow_downgrade=False, json=False, yes=True,
+                                           dry_run=getattr(args, "dry_run", False)), ctx, ui)
+
+
+def cmd_su_check(args, ctx, ui) -> int:
+    info = updater.check(ctx)
+    if getattr(args, "quiet", False) and not info["available"]:
+        return EX_OK
+    emit(args, ui, info, lambda: _print_update_info(ui, info))
+    return EX_OK
+
+
+def cmd_su_apply(args, ctx, ui) -> int:
+    ctx.require_root("Updating Bant")
+    if not args.version and not getattr(args, "dry_run", False):
+        info = updater.check(ctx, save=False)
+        if not info["available"]:
+            emit(args, ui, {"updated": False, "current": info["current"]}, lambda: ui.success(f"Bant {info['current']} is up to date."))
+            return EX_OK
+        if not getattr(args, "json", False):
+            _print_update_info(ui, info)
+        if not _need_confirm(args, ui, f"Install Bant {info['latest']} now?", True):
+            return EX_ERROR
+    elif args.version and not _need_confirm(args, ui, f"Install Bant {args.version}?", True):
+        return EX_ERROR
+    res = updater.apply(ctx, args.version, allow_downgrade=args.allow_downgrade)
+
+    def human() -> None:
+        if res.get("dry_run"):
+            ui.success(f"Would update to {res['target']}.")
+            _plan_footer(ctx, ui)
+        elif res["updated"]:
+            ui.success(f"Updated Bant {res['previous']} -> {res['current']} ({res['verified']}).")
+            ui.info(f"Configuration backup: {res['backup']}. Undo with: sudo bant self-update rollback")
+            ui.warn("Start `bant` again to use the new version.")
+        else:
+            ui.success(res["message"])
+    emit(args, ui, res, human)
+    return EX_OK
+
+
+def cmd_su_rollback(args, ctx, ui) -> int:
+    if not _need_confirm(args, ui, "Switch back to the previous Bant version?", True):
+        return EX_ERROR
+    res = updater.rollback(ctx)
+    emit(args, ui, res, lambda: ui.success(f"Bant is now {res['to']} (was {res['from']})."))
+    return EX_OK
+
+
+def cmd_su_status(args, ctx, ui) -> int:
+    st = updater.status(ctx)
+    from bant.presenters import render_selfupdate_status
+
+    emit(args, ui, st, lambda: render_selfupdate_status(ui, st))
+    return EX_OK
+
+
+def cmd_su_notify(args, ctx, ui) -> int:
+    msg = updater.set_notify(ctx, parse_onoff(args.value))
+    emit(args, ui, {"message": msg}, lambda: ui.success(msg))
+    return EX_OK
+
+
+def cmd_su_channel(args, ctx, ui) -> int:
+    msg = updater.set_channel(ctx, args.value)
+    emit(args, ui, {"message": msg}, lambda: ui.success(msg))
+    return EX_OK
+
+
 def cmd_tx_finish(args, ctx, ui) -> int:
     TxManager(ctx).finish_external(args.tx_id, args.outcome)
     return EX_OK
@@ -694,17 +843,41 @@ def cmd_fw_apply(args, ctx, ui) -> int:
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _flag_value(argv: Sequence[str], flag: str) -> str | None:
+    for i, a in enumerate(argv):
+        if a == flag and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith(flag + "="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def _startup_language(argv: Sequence[str], ctx: Context, stream) -> str:
+    """Decide the display language before the parser (and its --help text) is built."""
+    if "--json" in argv:
+        return "en"  # machine-readable output is always English
+    try:
+        code, _ = i18n.resolve(ctx, _flag_value(argv, "--lang"))
+    except BantError:
+        code = None
+    code = code or i18n.locale_hint() or i18n.DEFAULT
+    return code if code == "en" or stream_shows_cjk(stream) else "en"
+
+
 def main(argv: Sequence[str] | None = None, ctx: Context | None = None, ui: UI | None = None) -> int:
+    argv_list = list(argv) if argv is not None else sys.argv[1:]
+    ctx = ctx or Context(interactive=sys.stdin.isatty())
+    i18n.set_language(_startup_language(argv_list, ctx, ui.stream if ui else sys.stdout))
     parser = build_parser()
     try:
-        args = parser.parse_args(list(argv) if argv is not None else None)
+        args = parser.parse_args(argv_list)
     except SystemExit as exc:  # argparse exits 0 for --help/--version, 2 for usage errors
         return int(exc.code or 0) if isinstance(exc.code, int) else EX_USAGE
     ui = ui or UI(color=False if getattr(args, "no_color", False) else None, assume_yes=getattr(args, "yes", False))
-    ctx = ctx or Context(dry_run=getattr(args, "dry_run", False), assume_yes=getattr(args, "yes", False),
-                         interactive=sys.stdin.isatty())
-    if ctx.dry_run != getattr(args, "dry_run", False) and getattr(args, "dry_run", False):
+    if getattr(args, "dry_run", False):
         ctx.dry_run = True
+    if getattr(args, "yes", False):
+        ctx.assume_yes = True
     try:
         handler = getattr(args, "handler", None)
         if handler is None:

@@ -99,6 +99,7 @@ def test_tui_in_a_real_pty_starts_navigates_and_exits():
     if pid == 0:
         os.chdir(ROOT)
         os.environ["TERM"] = "xterm"
+        os.environ["BANT_LANG"] = "en"  # skip the first-run language prompt: it would persist a choice on this machine
         os.execv(sys.executable, [sys.executable, "-m", "bant"])
     buf = b""
 

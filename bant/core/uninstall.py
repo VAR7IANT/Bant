@@ -44,7 +44,7 @@ def inventory(ctx: Context) -> list[dict[str, str]]:
         add("firewall", f"{len(bans.active_entries(ctx))} Bant IP block(s) in nft table 'bant'", "remove")
     if p.apt_bant_conf.exists():
         add("updates", str(p.apt_bant_conf), "keep (automatic security updates stay on)")
-    for u in ("bant-firewall.service",):
+    for u in ("bant-firewall.service", "bant-update-check.service", "bant-update-check.timer"):
         if (p.systemd_system / u).exists():
             add("systemd", u, "remove")
     add("files", str(p.install_dir) + " and " + str(p.launcher), "remove")
@@ -140,9 +140,11 @@ def run(ctx: Context, *, purge: bool = False, remove_f2b_config: bool = False) -
         # systemd units and stale transaction units
         if has_systemd(ctx):
             ctx.run_mut(["systemctl", "disable", "--now", "bant-firewall.service"])
+            ctx.run_mut(["systemctl", "disable", "--now", "bant-update-check.timer"])
             for tx in TxManager(ctx).all():
                 TxManager(ctx).abandon_units(tx)
-            (p.systemd_system / "bant-firewall.service").unlink(missing_ok=True)
+            for unit in ("bant-firewall.service", "bant-update-check.service", "bant-update-check.timer"):
+                (p.systemd_system / unit).unlink(missing_ok=True)
             ctx.run_mut(["systemctl", "daemon-reload"])
             done.append("removed Bant systemd units")
 

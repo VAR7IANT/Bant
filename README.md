@@ -4,7 +4,7 @@
 verifies Fail2ban, manages firewall allowances and IP blocks without disturbing your existing
 workloads, audits the server, and gives you one interactive command - `bant` - to manage it all.
 
-> **Status: v0.1.0, pre-release.** The code is covered by automated unit and integration tests, and
+> **Status: pre-release (v0.1.x).** The code is covered by automated unit and integration tests, and
 > the real `sshd` and `fail2ban-client` binaries validate the configuration Bant generates. It has
 > **not yet been acceptance-tested on a disposable VPS over a real network.** Read
 > [`docs/TESTING.md`](docs/TESTING.md) before trusting it with a production server, and always keep
@@ -54,7 +54,18 @@ sudo bant ssh password off     only after a verified key login; with automatic r
 sudo bant fail2ban ban <IP>    ban / unban, trusted IPs, jail tuning
 sudo bant firewall allow 8443  Bant-owned, removable allowances
 sudo bant backup | restore | repair | uninstall
+sudo bant lang en|zh           English / 繁體中文 (asked the first time you open the menu)
+sudo bant self-update          update Bant itself from a newer GitHub release (check / apply / rollback)
 ```
+
+The interface is bilingual (English and Traditional Chinese). The first time you open the menu Bant asks
+which language you want and remembers it; `--json` output is always English.
+
+**Updating Bant.** From 0.1.1 on, `sudo bant self-update` checks GitHub Releases, verifies the download
+(release `SHA256SUMS`, or the tag's commit), installs it and keeps the previous version for
+`sudo bant self-update rollback`. A daily timer only *checks*; it never installs by itself, and
+`install.sh --no-update-check` turns it off. Details and limits (no signatures yet) in
+[`docs/SECURITY.md`](docs/SECURITY.md#self-update). Older installs upgrade once with `git pull && sudo bash install.sh`.
 
 Full reference: [`docs/CLI.md`](docs/CLI.md). Every command supports `--help`; most support
 `--json`; changes support `--dry-run`.
@@ -79,6 +90,7 @@ Full reference: [`docs/CLI.md`](docs/CLI.md). Every command supports `--help`; m
 - [`docs/RECOVERY.md`](docs/RECOVERY.md) - **locked out? start here** (provider console procedure)
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) - modules, data layout, transaction engine
 - [`docs/TESTING.md`](docs/TESTING.md) - test layers and the real-VPS acceptance checklist
+- [`docs/RELEASING.md`](docs/RELEASING.md) - publishing a release that installed copies can update to
 
 ## Development
 

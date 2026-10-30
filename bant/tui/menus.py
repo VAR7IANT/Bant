@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from bant import __version__
+from bant import __version__, i18n
 from bant.context import Context
 from bant.core import (
     backups,
@@ -19,9 +19,11 @@ from bant.core import (
     security_audit,
     ssh,
     status,
+    updater,
     updates,
 )
 from bant.errors import BantError
+from bant.i18n import tr
 from bant.presenters import (
     fmt_ts,
     render_doctor,
@@ -33,7 +35,7 @@ from bant.presenters import (
     render_status,
     render_updates,
 )
-from bant.ui import UI, Abort
+from bant.ui import UI, Abort, stream_shows_cjk
 from bant.utils.validation import (
     format_duration,
     parse_duration,
@@ -233,7 +235,10 @@ def ssh_rollback(ctx: Context, ui: UI) -> None:
 
 def ssh_validate(ctx: Context, ui: UI) -> None:
     ok, msg = ssh.sshconf.validate(ctx)
-    (ui.success if ok else ui.error)("sshd -t: " + ("configuration is valid" if ok else msg))
+    if ok:
+        ui.success("sshd -t: configuration is valid")
+    else:
+        ui.error(f"sshd -t: {msg}")
 
 
 def ssh_menu(ctx: Context, ui: UI) -> None:
@@ -322,7 +327,7 @@ def f2b_trusted(ctx: Context, ui: UI) -> None:
 def f2b_events(ctx: Context, ui: UI) -> None:
     lines = logs.read_lines(ctx, "fail2ban", 30)
     for ln in lines:
-        ui.text(" " + ln)
+        ui.text(" " + ln, raw=True)
     if not lines:
         ui.info("  (no events)")
 
@@ -416,7 +421,7 @@ def logs_menu(ctx: Context, ui: UI) -> None:
                 render_logs(ui, ctx.audit_log.read(60, grep))
             else:
                 for ln in logs.read_lines(ctx, source, 60, grep):
-                    ui.text(" " + ln)
+                    ui.text(" " + ln, raw=True)
         return run
     submenu(ctx, ui, "SECURITY LOGS", [("1", "Bant audit trail", show("audit")), ("2", "SSH events", show("ssh")), ("3", "Fail2ban events", show("fail2ban"))])
 
@@ -472,7 +477,8 @@ def bk_restore(ctx: Context, ui: UI) -> None:
 def bk_repair(ctx: Context, ui: UI) -> None:
     if need_root(ctx, ui, "Repair"):
         for a in repair.run(ctx):
-            ui.text(f" {ui.glyph('ok' if a['result'] == 'ok' else 'warn')} {a['action']}" + ("" if a["result"] == "ok" else f" - {a['result']}"))
+            ui.text(f" {ui.glyph('ok' if a['result'] == 'ok' else 'warn')} {tr(a['action'])}" + ("" if a["result"] == "ok" else f" - {tr(a['result'])}"),
+                    raw=True)
 
 
 def bk_help(ctx: Context, ui: UI) -> None:
@@ -486,3 +492,96 @@ def backup_menu(ctx: Context, ui: UI) -> None:
     submenu(ctx, ui, "BACKUP & RECOVERY", [("1", "Create backup", bk_create), ("2", "List backups", bk_list), ("3", "Restore backup", bk_restore),
                                           ("4", "Run repair", bk_repair), ("5", "Provider-console recovery steps", bk_help)])
 
+
+
+# ---------------------------------------------------------------------------
+# Language
+# ---------------------------------------------------------------------------
+
+_LANG_ANSWERS = {"1": "en", "en": "en", "english": "en", "2": "zh", "zh": "zh", "中文": "zh", "繁體中文": "zh", "繁体中文": "zh", "chinese": "zh"}
+
+
+def choose_language(ctx: Context, ui: UI, *, first_run: bool = False) -> None:
+    """Bilingual language picker. Shown on the first launch of the menu and from the Language menu entry."""
+    hint = i18n.locale_hint()
+    default = "2" if hint == "zh" else "1"
+    ui.clear()
+    ui.heading("BANT", "Select language / 選擇語言")
+    ui.menu([("1", "English"), ("2", "繁體中文 (Traditional Chinese)")])
+    while True:
+        answer = ui.ask("Language / 語言 (1/2)", default, translate=False).strip().lower()
+        code = _LANG_ANSWERS.get(answer)
+        if code:
+            break
+        ui.text("Please enter 1 or 2 / 請輸入 1 或 2", "warn", raw=True)
+    if code == "zh" and not stream_shows_cjk(ui.stream):
+        i18n.set_language("en")
+        ui.warn("This terminal does not look UTF-8, so Chinese would be garbled; showing English. "
+                "Use a UTF-8 terminal (e.g. LANG=C.UTF-8) and choose again from the Language menu.")
+        return
+    i18n.set_language(code)
+    try:
+        where = i18n.save(ctx, code)
+        ui.success("Language set to English." if code == "en" else "語言已設定為繁體中文。")
+        if where == "user":
+            ui.info("Saved as your personal preference (run with sudo to set it system-wide).")
+    except OSError as exc:
+        ui.warn(f"Could not save the language choice ({exc}); it applies to this session only.")
+    if first_run:
+        ui.pause()
+
+
+def language_menu(ctx: Context, ui: UI) -> None:
+    choose_language(ctx, ui)
+
+
+# ---------------------------------------------------------------------------
+# Bant self-update
+# ---------------------------------------------------------------------------
+
+def su_check(ctx: Context, ui: UI) -> None:
+    from bant.presenters import render_update_info
+
+    render_update_info(ui, updater.check(ctx))
+
+
+def su_apply(ctx: Context, ui: UI) -> None:
+    if not need_root(ctx, ui, "Updating Bant"):
+        return
+    info = updater.check(ctx)
+    from bant.presenters import render_update_info
+
+    render_update_info(ui, info)
+    if not info["available"] or not ui.confirm(f"Install Bant {info['latest']} now?", True):
+        return
+    res = updater.apply(ctx)
+    ui.success(f"Updated Bant {res['previous']} -> {res['current']} ({res['verified']}).")
+    ui.info(f"Configuration backup: {res['backup']}. Undo with the 'Roll back' option.")
+    ui.warn("Quit and start `bant` again to use the new version.")
+
+
+def su_rollback(ctx: Context, ui: UI) -> None:
+    if need_root(ctx, ui, "Rolling back Bant") and ui.confirm("Switch back to the previous Bant version?", True):
+        res = updater.rollback(ctx)
+        ui.success(f"Bant is now {res['to']} (was {res['from']}). Quit and start `bant` again.")
+
+
+def su_notify(ctx: Context, ui: UI) -> None:
+    if need_root(ctx, ui, "Changing the update check"):
+        on = not updater.notify_enabled(ctx)
+        ui.success(updater.set_notify(ctx, on))
+
+
+def su_channel(ctx: Context, ui: UI) -> None:
+    if need_root(ctx, ui, "Changing the update channel"):
+        ui.text(f" Current channel: {updater.channel(ctx)}  (auto = include pre-releases while Bant is below 1.0)")
+        ui.success(updater.set_channel(ctx, ui.ask("Channel (auto / stable / prerelease)", updater.channel(ctx))))
+
+
+def selfupdate_menu(ctx: Context, ui: UI) -> None:
+    from bant.presenters import render_selfupdate_status
+
+    submenu(ctx, ui, "BANT UPDATE", [
+        ("1", "Check for updates", su_check), ("2", "Install the update", su_apply), ("3", "Roll back to the previous version", su_rollback),
+        ("4", "Daily update check on / off", su_notify), ("5", "Update channel", su_channel),
+    ], render=lambda: render_selfupdate_status(ui, updater.status(ctx)))

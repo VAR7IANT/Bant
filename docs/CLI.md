@@ -9,6 +9,7 @@ prints `bant status` otherwise. Global options work before or after the command:
 | `--dry-run` | show what would change; nothing is modified |
 | `-y`, `--yes` | assume "yes" for confirmations (required when stdin is not a terminal) |
 | `--no-color` | plain output (also honoured: `NO_COLOR`, `TERM=dumb`, non-tty) |
+| `--lang en\|zh` | interface language for this run (`BANT_LANG` does the same); `--json` output is always English |
 
 Read-only commands work without root: `version status doctor audit logs ssh status fail2ban status
 firewall status updates status backup --list`. Everything that changes the system requires root
@@ -34,6 +35,7 @@ and fails with exit code 3 *before* doing anything otherwise.
 | Command | Purpose |
 |---|---|
 | `bant version` | print version |
+| `bant lang [en\|zh]` | show or set the interface language (English / 繁體中文); root sets it system-wide, others set a personal preference |
 | `bant status [--deep]` | SSH port/auth, Fail2ban, firewall, bans, findings; `--deep` adds update and log checks |
 | `bant doctor` | deep diagnostics, separating *installed / running / verified / misconfigured / unavailable* |
 | `bant audit [--fail-on SEV] [--quiet-info]` | findings with evidence, impact, recommendation, fixability |
@@ -74,6 +76,23 @@ and fails with exit code 3 *before* doing anything otherwise.
 | `sudo bant firewall remove PORT [--proto ...]` | remove only Bant-owned allowances |
 | `sudo bant firewall block IP/CIDR [--duration D] [--reason T]` | permanent/timed block in Bant's own `inet bant` table (needs `nft`) |
 | `sudo bant firewall unblock IP` / `blocked` / `trusted` / `trust` / `untrust` | list and manage |
+
+## Updating Bant itself (`self-update`)
+
+Not to be confused with `bant updates`, which manages the *operating system's* security updates.
+
+| Command | Purpose |
+|---|---|
+| `bant self-update` | check GitHub for a newer release; as root, offer to install it |
+| `bant self-update check [--quiet]` | read-only check (works without root); `--quiet` prints only when an update exists or on failure |
+| `sudo bant self-update apply [--version V] [--allow-downgrade]` | download, verify, install (`--dry-run` previews) |
+| `sudo bant self-update rollback` | switch back to the previously installed version (run again to switch forward) |
+| `bant self-update status` | installed version, channel, last check, whether the daily check is on |
+| `sudo bant self-update notify on\|off` | the daily *check* timer (it never installs anything) |
+| `sudo bant self-update channel auto\|stable\|prerelease` | `auto` = include pre-releases while Bant is below 1.0 |
+
+How it stays safe is described in [SECURITY.md](SECURITY.md#self-update). The command is available from the first release that contains
+it; installations older than that need one manual `git pull && sudo bash install.sh`.
 
 ## Maintenance
 

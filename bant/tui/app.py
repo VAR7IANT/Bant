@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bant import i18n
 from bant.context import Context
 from bant.tui import dashboard, menus
 from bant.ui import UI, Abort
@@ -18,6 +19,8 @@ MAIN_ITEMS = [
     ("9", "Protection Settings", menus.settings_menu),
     ("10", "Backup & Recovery", menus.backup_menu),
     ("11", "System Information", menus.system_info),
+    ("12", "Language / 語言", menus.language_menu),
+    ("13", "Update Bant", menus.selfupdate_menu),
 ]
 DIRECT = {"1", "6", "11"}  # screens that print and return (need a pause); others are menus that pause themselves
 
@@ -25,6 +28,8 @@ DIRECT = {"1", "6", "11"}  # screens that print and return (need a pause); other
 def run_tui(ctx: Context, ui: UI) -> int:
     table = {k: fn for k, _, fn in MAIN_ITEMS}
     try:
+        if i18n.resolve(ctx)[0] is None:
+            menus.choose_language(ctx, ui, first_run=True)
         while True:
             ui.clear()
             dashboard.draw(ctx, ui)

@@ -12,6 +12,7 @@ import os
 import random
 import re
 import shlex
+import subprocess
 import time
 from pathlib import Path
 
@@ -34,8 +35,10 @@ Subsystem\tsftp\t/usr/lib/openssh/sftp-server
 
 class FakeHost(Runner):
     def __init__(self, root: Path, *, os_id="debian", os_version="12", socket_mode=False, ufw=False,
-                 firewalld=False, fail2ban=True, ssh_installed=True, euid=0):
+                 firewalld=False, fail2ban=True, ssh_installed=True, euid=0, language="en"):
         super().__init__()
+        self.http_get = None  # tests assign a FakeGitHub
+        self.language = language  # None = never chosen (first run); the system config otherwise says this
         self.root = root
         self.paths = Paths(root)
         self.calls: list[list[str]] = []
@@ -99,9 +102,12 @@ class FakeHost(Runner):
 
     def make_ctx(self, **kw) -> Context:
         clock = kw.pop("clock", None) or (lambda: 2000.0)
-        ctx = Context(self.paths, self, euid=self.euid, clock=clock, config=Config.load(self.paths.config_file),
+        config = Config.load(self.paths.config_file)
+        if self.language and not config.data["general"].get("language"):
+            config.data["general"]["language"] = self.language
+        ctx = Context(self.paths, self, euid=self.euid, clock=clock, config=config, home=self.root / "home",
                       sleep=lambda s: None, banner_probe=self.banner, mirror_syslog=False,
-                      rng=kw.pop("rng", None) or random.Random(1234), **kw)
+                      rng=kw.pop("rng", None) or random.Random(1234), http_get=kw.pop("http_get", self.http_get), **kw)
         return ctx
 
     def banner(self, host: str, port: int) -> str | None:
@@ -378,12 +384,19 @@ class FakeHost(Runner):
 
     # ---- apt -------------------------------------------------------------
     def _cmd_env(self, argv, _input):
+        if "bash" in argv:  # running a downloaded install.sh: execute it for real (DESTDIR keeps it inside the temp root)
+            res = subprocess.run(argv, capture_output=True, text=True, timeout=300)
+            return CmdResult(argv, res.returncode, res.stdout, res.stderr)
         self.apt_calls.append(argv)
         if "fail2ban" in argv:
             self.fail2ban_installed = True
             self.binaries |= {"fail2ban-client", "fail2ban-regex"}
             self.f2b_running = True
         return CmdResult(argv, 0, "", "")
+
+    def _cmd_bash(self, argv, _input):
+        res = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        return CmdResult(argv, res.returncode, res.stdout, res.stderr)
 
     def _cmd_apt_get(self, argv, _input):
         return CmdResult(argv, 0, "", "")

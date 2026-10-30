@@ -4,6 +4,24 @@ All notable changes to Bant are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - Unreleased
+
+### Added
+- **Bilingual interface (English / 繁體中文).** The first time the menu is opened Bant asks for a language and remembers it
+  (`/etc/bant/bant.toml` for root, `~/.config/bant/language` otherwise). `bant lang [en|zh]`, `--lang`, `BANT_LANG`, and a Language entry
+  in the menu. Everything a user sees is translated (menus, status, audit findings, errors and hints, `--help`); `--json` stays English;
+  terminals that are not UTF-8 fall back to English. Wide (CJK) characters are aligned correctly.
+- **Built-in updater** `bant self-update` (`check`, `apply`, `rollback`, `status`, `notify`, `channel`): downloads only from GitHub over
+  HTTPS, verifies a release's `SHA256SUMS` (or, for releases without assets, that the source archive's commit equals the tag's commit),
+  extracts defensively, installs through the release's own `install.sh`, verifies the result and restores the previous version on any
+  failure. Optional daily *check-only* timer; the dashboard shows when an update is available. Release assets are produced by
+  `.github/workflows/release.yml`; maintainers' procedure in `docs/RELEASING.md`.
+- SSH port: random free port by default (outside the kernel's ephemeral range), any port you choose (including 667), an existing custom
+  port is kept (carried over from the previous unreleased work).
+
+### Changed
+- `install.sh` installs the update-check units; `--no-update-check` skips enabling the timer. `uninstall` removes them.
+
 ## [0.1.0] - 2026-10-30 (pre-release)
 
 First functional release (foundation). Verified by automated unit and integration tests only;

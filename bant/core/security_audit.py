@@ -83,7 +83,7 @@ def _ssh_checks(ctx: Context) -> list[Finding]:
                            "Forces password-based logins", "sudo bant ssh set pubkey yes", True, "sudo bant ssh set pubkey yes"))
     if st.root_login == "yes":
         sev = "high" if st.password_auth else "medium"
-        out.append(Finding("SSH-030", sev, "Root login is permitted" + (" with password" if st.password_auth else ""),
+        out.append(Finding("SSH-030", sev, "Root login is permitted with password" if st.password_auth else "Root login is permitted",
                            f"PermitRootLogin yes (password auth {'on' if st.password_auth else 'off'})",
                            "The root account is the most targeted account on the internet",
                            "Create a sudo user, then `sudo bant ssh root key-only` (or `no`).", True, "sudo bant ssh root key-only"))
@@ -225,7 +225,8 @@ def _auth_failure_checks(ctx: Context) -> list[Finding]:
     ov = fail2ban.overview(ctx)
     protected = ov.state == "verified"
     sev = "info" if protected or count < 50 else "high"
-    return [Finding("AUTH-001", sev, f"{count}{'+' if count >= 5000 else ''} failed SSH login events in the last 24h", "journal sample",
+    shown = f"{count}+" if count >= 5000 else str(count)
+    return [Finding("AUTH-001", sev, f"{shown} failed SSH login events in the last 24h", "journal sample",
                     "Normal background noise on public servers; a problem when nothing blocks it",
                     "Keep Fail2ban verified; consider key-only login." if protected else "Fail2ban is not verified - fix that first.",
                     False)]

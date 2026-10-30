@@ -7,7 +7,7 @@ from typing import Any
 
 from bant import __version__
 from bant.context import Context
-from bant.core import backups, bans, fail2ban, firewall, migration, security_audit, ssh, updates
+from bant.core import backups, bans, fail2ban, firewall, migration, security_audit, ssh, updater, updates
 from bant.core.rollback import TxManager
 from bant.platform import detect_os, has_systemd, unit_state
 from bant.utils.fsutil import mode_str
@@ -62,6 +62,7 @@ def _collect(ctx: Context, deep: bool) -> dict[str, Any]:
                      "reboot_required": upd.reboot_required, "installed": upd.installed} if upd else None),
         "findings": {"summary": security_audit.summarize(findings)["counts"],
                      "critical_and_high": [f.to_dict() for f in crit]},
+        "bant_update": {k: updater.cached(ctx).get(k) for k in ("latest", "available", "checked_at", "prerelease")},
         "health": health,
         "notes": list(ctx.config.problems) + ([ssh_note] if (ssh_note := st.note) and st.source != "sshd -T" else []),
     }
@@ -115,14 +116,14 @@ def doctor(ctx: Context) -> list[DoctorCheck]:
     ov = fail2ban.overview(ctx, st.active_ports or None)
     add("fail2ban", "installed", ov.installed, ov.version)
     if ov.installed:
-        add("fail2ban", "service state", ov.state in ("verified", "running"), f"{ov.state} ({ov.service})")
+        add("fail2ban", "service state", ov.state in ("verified", "running"), f"{ov.state} (service {ov.service})")
         for c in ov.checks:
             add("fail2ban", c.name, c.ok, c.detail, warn=c.ok is None)
         for c in ov.conflicts:
             add("fail2ban", "admin override", False, c, warn=True)
 
     fw = firewall.detect(ctx)
-    add("firewall", "backend", True, f"{fw.backend} ({fw.mode}) {fw.detail}")
+    add("firewall", "backend", True, f"{fw.backend} ({fw.mode}): {fw.detail}")
     add("firewall", "Bant blocklist available (nft)", bans.available(ctx), "needed for permanent/manual blocks", warn=True)
 
     items = backups.list_backups(ctx)

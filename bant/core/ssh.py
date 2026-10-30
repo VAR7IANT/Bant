@@ -359,7 +359,7 @@ def change_options(ctx: Context, changes: dict[str, str | None], *, label: str, 
             bad = _effective_matches(ctx, changes, new_eff)
             if bad:
                 kw = next(k for k, v in changes.items() if v is not None)
-                raise OperationFailed("The change did not take effect (" + "; ".join(bad) + "): " + _shadow_report(ctx, kw))
+                raise OperationFailed(f"The change did not take effect ({'; '.join(bad)}): {_shadow_report(ctx, kw)}")
             if not ctx.banner_probe("127.0.0.1", (st.active_ports or [22])[0]):
                 raise OperationFailed("sshd does not answer on its port after reload.")
         except Exception as exc:

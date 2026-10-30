@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from bant.context import Context
-from bant.core import backups, fail2ban, firewall, migration, ports, ssh
+from bant.core import backups, fail2ban, firewall, migration, ports, ssh, updater
 from bant.core.rollback import TxManager
 from bant.errors import BantError
 from bant.platform import detect_os, has_systemd
@@ -24,7 +24,7 @@ def _step(ctx: Context, name: str, status: str, detail: str = "") -> dict[str, s
 
 
 def run(ctx: Context, *, migrate: bool = True, with_fail2ban: bool = True, port: int | str | None = None,
-        minutes: int | None = None) -> dict[str, Any]:
+        minutes: int | None = None, update_check: bool = True) -> dict[str, Any]:
     ctx.require_root("Setting up Bant")
     steps: list[dict[str, str]] = []
     next_steps: list[str] = []
@@ -36,9 +36,9 @@ def run(ctx: Context, *, migrate: bool = True, with_fail2ban: bool = True, port:
         fsutil.ensure_dir(ctx.paths.log_dir, 0o750)
         if not ctx.paths.config_file.exists():
             ctx.config.save()
-        steps.append(_step(ctx, "baseline", "done", f"{osi.pretty}; config {ctx.paths.config_file}"))
-        if not osi.supported:
-            steps[-1]["detail"] += " (unsupported release - proceeding cautiously)"
+        base_detail = f"{osi.pretty}; config {ctx.paths.config_file}"
+        steps.append(_step(ctx, "baseline", "done",
+                           base_detail if osi.supported else f"{base_detail} (unsupported release - proceeding cautiously)"))
 
         # 2 backup
         if not backups.list_backups(ctx):
@@ -68,11 +68,11 @@ def run(ctx: Context, *, migrate: bool = True, with_fail2ban: bool = True, port:
                     ctx.run_mut(["systemctl", "enable", "--now", "fail2ban.service"])
                     detail = f"{msg}; sshd jail on ports {res['ports']}"
                     if res["conflicts"]:
-                        detail += "; kept administrator settings: " + "; ".join(res["conflicts"])
+                        detail = f"{msg}; sshd jail on ports {res['ports']}; kept administrator settings: {'; '.join(res['conflicts'])}"
                     steps.append(_step(ctx, "fail2ban", "done", detail))
             except BantError as exc:
                 steps.append(_step(ctx, "fail2ban", "failed", exc.message))
-                next_steps.append("Fix Fail2ban, then run `sudo bant fail2ban enable`: " + exc.message)
+                next_steps.append(f"Fix Fail2ban, then run `sudo bant fail2ban enable`: {exc.message}")
 
         # 4 firewall (observation + registry reconciliation)
         fw = firewall.detect(ctx)
@@ -100,6 +100,14 @@ def run(ctx: Context, *, migrate: bool = True, with_fail2ban: bool = True, port:
                     steps.append(_step(ctx, "ssh-migration", "failed", exc.message))
         else:
             steps.append(_step(ctx, "ssh-migration", "skipped", "disabled by option"))
+
+        # 5b daily check for new Bant releases (check only; never installs by itself)
+        if update_check and has_systemd(ctx) and (ctx.paths.systemd_system / updater.TIMER).exists():
+            try:
+                updater.set_notify(ctx, True)
+                steps.append(_step(ctx, "update-check", "done", "daily check for new Bant releases enabled (check only)"))
+            except BantError as exc:
+                steps.append(_step(ctx, "update-check", "skipped", exc.message))
 
         # 6 systemd unit for firewall persistence
         if has_systemd(ctx) and (ctx.paths.systemd_system / "bant-firewall.service").exists():

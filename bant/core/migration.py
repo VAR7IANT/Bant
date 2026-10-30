@@ -56,8 +56,8 @@ def plan(ctx: Context, target: int) -> PortPlan:
         p.blockers.append("Could not identify the SSH socket unit.")
     pinned = sshconf.listen_addresses_with_ports(sshconf.parse_config(ctx))
     if pinned and st.mode != "socket":
-        p.blockers.append("sshd_config pins ports inside ListenAddress (" + pinned[0].raw.strip() + "); "
-                          "Bant cannot move those automatically. Convert them to plain `ListenAddress <ip>` + `Port` first.")
+        p.blockers.append(f"sshd_config pins ports inside ListenAddress ({pinned[0].raw.strip()}); Bant cannot move those "
+                          "automatically. Convert them to plain `ListenAddress <ip>` + `Port` first.")
     if not p.old_ports:
         p.blockers.append("Could not determine the current SSH port(s).")
     if p.old_ports == [target]:
@@ -205,12 +205,14 @@ def verify_new_session(ctx: Context, tx: Transaction) -> tuple[bool, str, netinf
         s = cands[0]
         return True, f"verified: {s.user} from {s.remote_ip} via port {s.local_port}", s
     where = f"on TCP port {port}" if port else "using your SSH key"
-    msg = (f"No authenticated SSH session {where} that started after this change was found on the server.\n"
-           "  1. Open a NEW terminal and connect "
-           + (f"(for example: ssh -p {port} <user>@<server-ip>)" if port else "with your key (ssh -i <key> <user>@<server-ip>)")
-           + ".\n  2. Keep it open and run `sudo bant ssh confirm` again (from either session).\n"
-           "  If the new connection times out, a provider/cloud firewall may be blocking the port; "
-           "allow it there, or run `sudo bant ssh rollback`.")
+    how = f"(for example: ssh -p {port} <user>@<server-ip>)" if port else "with your key (ssh -i <key> <user>@<server-ip>)"
+    msg = "\n".join([
+        f"No authenticated SSH session {where} that started after this change was found on the server.",
+        f"  1. Open a NEW terminal and connect {how}.",
+        "  2. Keep it open and run `sudo bant ssh confirm` again (from either session).",
+        "  If the new connection times out, a provider/cloud firewall may be blocking the port; "
+        "allow it there, or run `sudo bant ssh rollback`.",
+    ])
     return False, msg, None
 
 

@@ -7,7 +7,8 @@ from typing import Any
 
 from bant import __version__
 from bant.core.security_audit import SEVERITIES, Finding
-from bant.ui import SEV_STYLE, UI, style_for_state
+from bant.i18n import tr
+from bant.ui import SEV_STYLE, UI, pad, style_for_state
 from bant.utils.validation import humanize_duration
 
 
@@ -55,11 +56,11 @@ def render_status(ui: UI, d: dict[str, Any]) -> None:
     fw_label = f"{fw['backend']} ({'active' if fw['active'] else 'none detected'}, {fw['mode']})"
     health_style = style_for_state(d["health"])
     rows = [
-        ("OS", d["os"]["name"] + ("" if d["os"]["supported"] else "  (unsupported release)"), None if d["os"]["supported"] else "warn"),
+        ("OS", d["os"]["name"] if d["os"]["supported"] else f"{d['os']['name']}  (unsupported release)", None if d["os"]["supported"] else "warn"),
         ("Kernel", d["os"]["kernel"], None),
         ("SSH port", ports, "ok" if len(ssh["ports"]) == 1 and ssh["ports"][0] != 22 else "warn"),
         ("Password login", pw, pws), ("Public key auth", pk, pks),
-        ("Root login", ssh["root_label"] or ssh["root_login"], "warn" if ssh["root_login"] == "yes" else None),
+        ("Root login", tr(ssh["root_label"]) if ssh["root_label"] else ssh["root_login"], "warn" if ssh["root_login"] == "yes" else None),
         ("Fail2ban", f2_label, f2_style),
         ("SSH jail ports", ", ".join(map(str, f2b["ports"])) or "-", None),
         ("Firewall", fw_label, "ok" if fw["active"] else "warn"),
@@ -67,16 +68,20 @@ def render_status(ui: UI, d: dict[str, Any]) -> None:
     ]
     if d.get("updates"):
         u = d["updates"]
-        rows.append(("Security updates", f"{'auto' if u['auto_enabled'] else 'manual'}; {u['pending_security']} pending"
-                     + ("; reboot required" if u["reboot_required"] else ""), "warn" if u["pending_security"] else "ok"))
+        mode = "auto" if u["auto_enabled"] else "manual"
+        text = f"{mode}; {u['pending_security']} pending; reboot required" if u["reboot_required"] else f"{mode}; {u['pending_security']} pending"
+        rows.append(("Security updates", text, "warn" if u["pending_security"] else "ok"))
+    bu = d.get("bant_update") or {}
+    if bu.get("available"):
+        rows.append(("Bant update", f"{bu['latest']} available - run: sudo bant self-update", "warn"))
     counts = d["findings"]["summary"]
     rows.append(("Critical / High", f"{counts['critical']} / {counts['high']}", "bad" if counts["critical"] or counts["high"] else "ok"))
-    rows.append(("Security status", d["health"].upper(), health_style))
+    rows.append(("Security status", tr(d["health"]).upper(), health_style))
     ui.kv(rows)
     if ssh.get("pending"):
         render_pending(ui, ssh["pending"])
     for f in d["findings"]["critical_and_high"][:5]:
-        ui.text(f" ! [{f['severity'].upper()}] {f['title']}", SEV_STYLE[f["severity"]])
+        ui.text(f" ! [{tr(f['severity']).upper()}] {tr(f['title'])}", SEV_STYLE[f["severity"]], raw=True)
     for n in d.get("notes", []):
         ui.info(f" note: {n}")
     if not d["privileged"]:
@@ -86,21 +91,21 @@ def render_status(ui: UI, d: dict[str, Any]) -> None:
 def render_findings(ui: UI, findings: list[Finding], summary: dict[str, Any], verbose: bool = True) -> None:
     ui.heading("SECURITY AUDIT", "configuration review - not a guarantee")
     c = summary["counts"]
-    ui.text("  " + "   ".join(f"{s.capitalize()}: {c[s]}" for s in SEVERITIES))
-    ui.text(f"  {summary['verdict']}", "bad" if c["critical"] or c["high"] else ("warn" if c["medium"] else "ok"))
+    ui.text("  " + "   ".join(f"{tr(s).capitalize()}: {c[s]}" for s in SEVERITIES), raw=True)
+    ui.text("  " + tr(summary["verdict"]), "bad" if c["critical"] or c["high"] else ("warn" if c["medium"] else "ok"), raw=True)
     for f in findings:
         if f.severity == "info" and not verbose:
             continue
         ui.text("")
-        ui.text(f" [{f.severity.upper()}] {f.id}  {f.title}", SEV_STYLE[f.severity])
-        ui.text(f"   Evidence:       {f.evidence}")
+        ui.text(f" [{tr(f.severity).upper()}] {f.id}  {tr(f.title)}", SEV_STYLE[f.severity], raw=True)
+        ui.text(f"   {pad(tr('Evidence:'), 16)}{f.evidence}", raw=True)
         if f.severity != "info" or f.impact != "None":
-            ui.text(f"   Impact:         {f.impact}")
-        ui.text(f"   Recommendation: {f.recommendation}")
+            ui.text(f"   {pad(tr('Impact:'), 16)}{tr(f.impact)}", raw=True)
+        ui.text(f"   {pad(tr('Recommendation:'), 16)}{tr(f.recommendation)}", raw=True)
         if f.fixable:
-            ui.text(f"   Bant can fix:   yes  ({f.fix})" if f.fix else "   Bant can fix:   yes", "ok")
+            ui.text(f"   {pad(tr('Bant can fix:'), 16)}{tr('yes')}" + (f"  ({f.fix})" if f.fix else ""), "ok", raw=True)
     ui.text("")
-    ui.info(f" {summary['disclaimer']}")
+    ui.info(" " + tr(summary["disclaimer"]))
 
 
 def render_ssh(ui: UI, st, pend: dict[str, Any] | None = None) -> None:
@@ -110,23 +115,26 @@ def render_ssh(ui: UI, st, pend: dict[str, Any] | None = None) -> None:
         return
     pw, pws = yn(st.password_auth)
     pk, pks = yn(st.pubkey_auth)
+    unit = st.service_unit or "?"
+    state = "active" if st.service_active else "inactive"
+    mode_txt = f"socket activation ({st.socket_unit})" if st.mode == "socket" else "service"
+    cfg_ports = ", ".join(map(str, st.config_ports))
     ui.kv([
-        ("Service", f"{st.service_unit or '?'} ({'active' if st.service_active else 'inactive'}), mode: "
-                    + ("socket activation (" + str(st.socket_unit) + ")" if st.mode == "socket" else "service"), None),
+        ("Service", f"{unit} ({state}), mode: {mode_txt}", None),
         ("Listening ports", ", ".join(map(str, st.listening_ports)) or "none detected", "ok" if st.listening_ports else "bad"),
-        ("Configured ports", ", ".join(map(str, st.config_ports)) + ("  (ignored: socket activation)" if st.mode == "socket" else ""), None),
-        ("Config valid", {True: "yes", False: "NO - " + st.config_error[:60], None: "unknown (needs root)"}[st.config_valid],
+        ("Configured ports", f"{cfg_ports}  (ignored: socket activation)" if st.mode == "socket" else cfg_ports, None),
+        ("Config valid", {True: "yes", False: f"NO - {st.config_error[:60]}", None: "unknown (needs root)"}[st.config_valid],
          {True: "ok", False: "bad", None: "dim"}[st.config_valid]),
         ("Password login", pw, pws),
         ("Keyboard-interactive", "Enabled" if st.kbd_interactive else "Disabled", "warn" if st.kbd_interactive and not st.password_auth else None),
         ("Public key auth", pk, pks),
-        ("Root login", f"{st.root_login}  - {st.root_label}", "warn" if st.root_login == "yes" else None),
+        ("Root login", f"{st.root_login}  - {tr(st.root_label)}", "warn" if st.root_login == "yes" else None),
         ("Root password login", "possible" if st.root_password_login else "not possible", "bad" if st.root_password_login else "ok"),
-        ("MaxAuthTries", st.max_auth_tries, None), ("LoginGraceTime", st.login_grace_time + "s", None),
+        ("MaxAuthTries", st.max_auth_tries, None), ("LoginGraceTime", f"{st.login_grace_time}s", None),
         ("AuthenticationMethods", st.authentication_methods, None), ("TCP forwarding", st.forwarding, None),
-        ("Config source", st.source + (f"  ({st.note})" if st.note else ""), "dim"),
+        ("Config source", f"{st.source}  ({tr(st.note)})" if st.note else st.source, "dim"),
     ])
-    ui.info(f" {st.root_detail}")
+    ui.info(" " + tr(st.root_detail))
     for m in st.match_overrides:
         ui.text(f" Match override: {m}", "warn")
     if pend:
@@ -141,7 +149,7 @@ def render_fail2ban(ui: UI, ov) -> None:
     label, style = F2B_LABELS.get(ov.state, (ov.state, None))
     ui.kv([
         ("Protection", label, style), ("Version", ov.version, None),
-        ("Service", f"{ov.service}{' (starts at boot)' if ov.enabled_on_boot else ' (NOT enabled at boot)'}", "ok" if ov.service == "active" else "bad"),
+        ("Service", f"{ov.service} (starts at boot)" if ov.enabled_on_boot else f"{ov.service} (NOT enabled at boot)", "ok" if ov.service == "active" else "bad"),
         ("SSH jail", "Enabled, running" if ov.jail_running else ("Defined, not running" if ov.jail_enabled else "Not defined"), "ok" if ov.jail_running else "bad"),
         ("Protected SSH port(s)", ", ".join(map(str, ov.ports)) or "-", None),
         ("Max attempts", ov.maxretry, None), ("Detection window", ov.findtime, None), ("Ban duration", ov.bantime, None),
@@ -153,7 +161,8 @@ def render_fail2ban(ui: UI, ov) -> None:
         ui.section("Verification")
         for c in ov.checks:
             mark = {True: "ok", False: "bad", None: "warn"}[c.ok]
-            ui.text(f" {ui.glyph('ok' if c.ok else ('bad' if c.ok is False else 'warn'))} {c.name}" + (f" - {c.detail}" if c.detail and c.ok is not True else ""), mark)
+            ui.text(f" {ui.glyph('ok' if c.ok else ('bad' if c.ok is False else 'warn'))} {tr(c.name)}"
+                    + (f" - {tr(c.detail)}" if c.detail and c.ok is not True else ""), mark, raw=True)
     for c in ov.conflicts:
         ui.text(f" Administrator override: {c}", "warn")
 
@@ -164,7 +173,7 @@ def render_firewall(ui: UI, info, rules: list[dict[str, Any]], listeners) -> Non
            ("Bant mode", "manage" if info.mode == "manage" else "observation only", "ok" if info.mode == "manage" else "warn"),
            ("Inbound filtered", "yes" if info.restrictive else "no / unknown", None),
            ("Docker detected", "yes (rules left untouched)" if info.docker else "no", None),
-           ("Detail", info.detail, "dim")])
+           ("Detail", tr(info.detail), "dim")])
     ui.section("Bant-managed allowances")
     ui.table(["ID", "Backend", "Port", "Purpose", "Added"], [[r["id"], r["backend"], f"{r['port']}/{r['proto']}", r["purpose"], fmt_ts(r["added"])] for r in rules])
     ui.section("Listening sockets")
@@ -178,10 +187,10 @@ def render_doctor(ui: UI, checks) -> None:
     area = None
     for c in checks:
         if c.area != area:
-            ui.section(c.area)
+            ui.section(tr(c.area))
             area = c.area
         mark = ui.glyph({"ok": "ok", "warn": "warn", "fail": "bad", "skip": "skip"}[c.status])
-        ui.text(f" {mark} {c.name}" + (f" - {c.detail}" if c.detail else ""), style_for_state(c.status))
+        ui.text(f" {mark} {tr(c.name)}" + (f" - {tr(c.detail, record=False)}" if c.detail else ""), style_for_state(c.status), raw=True)
     fails = sum(1 for c in checks if c.status == "fail")
     warns = sum(1 for c in checks if c.status == "warn")
     ui.text("")
@@ -210,14 +219,14 @@ def render_logs(ui: UI, records: list[dict[str, Any]]) -> None:
     for r in records:
         style = {"warning": "warn", "error": "bad"}.get(r.get("level", ""), None)
         detail = " ".join(f"{k}={v}" for k, v in (r.get("detail") or {}).items())
-        ui.text(f" {r['ts']}  {r['event']:<22} {r.get('actor', '')}  {detail}"[: ui.width * 3], style)
+        ui.text(f" {r['ts']}  {r['event']:<22} {r.get('actor', '')}  {detail}"[: ui.width * 3], style, raw=True)
 
 
 def render_setup(ui: UI, report: dict[str, Any]) -> None:
     ui.heading(f"BANT v{__version__} SETUP")
     for s in report["steps"]:
         mark = ui.glyph({"done": "ok", "skipped": "skip", "pending": "wait", "failed": "bad"}[s["status"]])
-        ui.text(f" {mark} {s['step']}: {s['detail']}", {"done": "ok", "pending": "warn", "failed": "bad"}.get(s["status"]))
+        ui.text(f" {mark} {tr(s['step'])}: {tr(s['detail'])}", {"done": "ok", "pending": "warn", "failed": "bad"}.get(s["status"]), raw=True)
     ui.text("")
     outcome = report["outcome"]
     if outcome == "complete":
@@ -240,3 +249,26 @@ def render_setup(ui: UI, report: dict[str, Any]) -> None:
 
 def human_duration(seconds: int) -> str:
     return humanize_duration(seconds)
+
+
+def render_update_info(ui: UI, info: dict[str, Any]) -> None:
+    ui.heading("BANT UPDATE")
+    ui.kv([("Installed version", info["current"], None), ("Update channel", info["channel"], None),
+           ("Latest release", info["latest"] or "none found", None)])
+    if info["available"]:
+        kind = "pre-release" if info["prerelease"] else "stable release"
+        ui.text(f" Update available: {info['latest']} ({tr(kind)})", "warn")
+        if info.get("url"):
+            ui.text(f" Release notes: {info['url']}", "dim")
+    else:
+        ui.success(f"Bant {info['current']} is up to date.")
+
+
+def render_selfupdate_status(ui: UI, st: dict[str, Any]) -> None:
+    ui.heading("BANT UPDATE SETTINGS")
+    last = fmt_ts(st["last_checked"]) if st["last_checked"] else "never"
+    ui.kv([("Installed version", st["current"], None), ("Update channel", st["channel"], None), ("Last check", last, None),
+           ("Latest known", st["latest"] or "unknown", None),
+           ("Update available", "yes" if st["available"] else "no", "warn" if st["available"] else None),
+           ("Daily check", "on (check only)" if st["daily_check"] else "off", None),
+           ("Previous version kept", st["previous_version"] or "none", None)])

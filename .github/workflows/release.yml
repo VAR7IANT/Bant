@@ -1,0 +1,40 @@
+name: Release assets
+
+# When a GitHub Release is published, attach the verified artifacts that `bant self-update` prefers:
+#   bant-<version>.tar.gz   (git archive of the tag, top directory Bant-<version>/)
+#   SHA256SUMS
+# The tag must match bant/__init__.py's __version__.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  assets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - name: Build tarball and checksums
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          DECLARED="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' bant/__init__.py)"
+          if [ "$DECLARED" != "$VERSION" ]; then
+            echo "Tag $TAG does not match bant/__init__.py ($DECLARED)" >&2
+            exit 1
+          fi
+          git archive --format=tar.gz --prefix="Bant-${VERSION}/" -o "bant-${VERSION}.tar.gz" "$TAG"
+          sha256sum "bant-${VERSION}.tar.gz" > SHA256SUMS
+          cat SHA256SUMS
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" "bant-${VERSION}.tar.gz" SHA256SUMS --clobber

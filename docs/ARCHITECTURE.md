@@ -23,9 +23,14 @@ bant/
     security_audit  findings; status.py  status + doctor; repair.py; backups.py
     setup.py        first-run orchestration; uninstall.py
     logs.py         journal/auth.log/audit trail access
+    updater.py      self-update: check GitHub releases, verify, safe-extract, install, roll back
+    ports.py        SSH port choice: requested / existing / remembered / random (outside the ephemeral range)
+  i18n.py           language selection + output-boundary translator (English source text, zh catalog)
+  locales/zh_tw.py  Traditional Chinese message catalog (~1100 entries)
   utils/            commands (Runner), fsutil (atomic IO), logging (audit), validation, tomlio
 scripts/emergency-recovery.sh   POSIX sh, no Python
 systemd/bant-firewall.service   oneshot boot re-apply of Bant-owned firewall state
+systemd/bant-update-check.*     daily timer + oneshot that only CHECKS for a newer release
 install.sh                      checkout-based installer (DESTDIR aware)
 ```
 
@@ -67,6 +72,15 @@ The rollback script executes (1) undo commands newest-first (firewall removals),
 restorations (missing originals are deleted), (3) post commands (reload sshd/Fail2ban, restart
 `ssh.socket`), marks `rolled_back` only if every restoration succeeded (else `rollback.error`), then
 disarms its own timer and notifies Bant for bookkeeping.
+
+## Internationalisation
+
+Source messages stay plain English strings/f-strings. `i18n.tr()` translates at the *output boundary* (UI methods, error printing):
+exact match -> template match (catalog keys with `{}` placeholders are matched against the already-formatted text, captured values are
+translated recursively) -> prefix keys (ending in a space) -> per-line -> per-sentence -> unchanged English. A missing translation can
+therefore never break output. Tests keep the catalog honest: an AST scan lists every message-like string in the source and fails if one
+has no Chinese entry, and the whole CLI plus every TUI screen is run in Chinese with a recorder that fails on any message that reaches the
+screen untranslated. `--json` is always English. CJK text is width-aware (`ui.pad`, `display_width`).
 
 ## Design decisions
 

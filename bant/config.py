@@ -14,10 +14,11 @@ from bant.utils.validation import parse_duration, parse_int_range, parse_ip, par
 CONFIG_VERSION = 1
 
 DEFAULTS: dict[str, dict[str, Any]] = {
-    "general": {"config_version": CONFIG_VERSION},
+    "general": {"config_version": CONFIG_VERSION, "language": ""},
     "ssh": {"port": AUTO_SSH_PORT, "rollback_minutes": DEFAULT_ROLLBACK_MINUTES},
     "fail2ban": {"maxretry": 5, "findtime": "10m", "bantime": "1h"},
     "trust": {"ips": []},
+    "update": {"channel": "auto"},
 }
 
 HEADER = (
@@ -81,6 +82,12 @@ class Config:
             except (ValidationError, KeyError, TypeError, ValueError):
                 self.problems.append(f"invalid [{section}] {key}={d[section].get(key)!r}; using default")
                 d[section][key] = DEFAULTS[section][key]
+        if d["update"].get("channel") not in ("auto", "stable", "prerelease"):
+            self.problems.append(f"invalid update channel {d['update'].get('channel')!r}; using auto")
+            d["update"]["channel"] = "auto"
+        if d["general"].get("language", "") not in ("", "en", "zh"):
+            self.problems.append(f"invalid language {d['general']['language']!r}; ignored")
+            d["general"]["language"] = ""
         clean = []
         for ip in d["trust"].get("ips", []):
             try:

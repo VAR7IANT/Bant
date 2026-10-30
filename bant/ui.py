@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import os
 import sys
+import unicodedata
 from collections.abc import Iterable, Sequence
 from typing import Any, TextIO
+
+from bant.i18n import tr
 
 try:  # Rich is optional at runtime
     from rich import box
@@ -26,6 +29,30 @@ except ImportError:  # pragma: no cover - exercised via force_plain in tests
 
 STYLES = {"ok": "green", "warn": "yellow", "bad": "bold red", "dim": "dim", "accent": "cyan", "title": "bold"}
 SEV_STYLE = {"critical": "bad", "high": "bad", "medium": "warn", "low": "accent", "info": "dim"}
+
+
+YES_WORDS = {"y", "yes", "是", "好", "確定", "确定", "確認", "确认"}
+NO_WORDS = {"n", "no", "否", "不", "取消"}
+
+
+def stream_shows_cjk(stream: TextIO) -> bool:
+    """True when the stream looks like a UTF-8 terminal (Chinese would otherwise be garbled)."""
+    enc = (getattr(stream, "encoding", "") or "").lower()
+    return "utf" in enc and os.environ.get("TERM") != "linux"
+
+
+def display_width(text: str) -> int:
+    """Terminal cell width (East Asian wide/fullwidth characters take two cells)."""
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else (0 if unicodedata.combining(ch) else 1) for ch in text)
+
+
+def pad(text: str, width: int) -> str:
+    return text + " " * max(0, width - display_width(text))
+
+
+def center(text: str, width: int) -> str:
+    gap = max(0, width - display_width(text))
+    return " " * (gap // 2) + text + " " * (gap - gap // 2)
 
 
 class Abort(Exception):
@@ -57,26 +84,28 @@ class UI:
         return max(40, min(cols, 78))
 
     # ---- basic output ------------------------------------------------------
-    def text(self, message: str = "", style: str | None = None) -> None:
+    def text(self, message: str = "", style: str | None = None, *, raw: bool = False) -> None:
+        """Print a message (translated). raw=True prints data such as log lines untouched."""
+        message = message if raw else tr(message)
         if self.rich:
             self.console.print(Text(message, style=STYLES.get(style or "", "")) if style else Text(message))
         else:
             print(message, file=self.stream)
 
     def success(self, message: str) -> None:
-        self.text(f"{self.glyph('ok')} {message}" if self.unicode else f"[OK] {message}", "ok")
+        self.text(f"{self.glyph('ok')} {tr(message)}" if self.unicode else f"[OK] {tr(message)}", "ok", raw=True)
 
     def warn(self, message: str) -> None:
-        self.text(f"! {message}" if self.unicode else f"[WARN] {message}", "warn")
+        self.text(f"! {tr(message)}" if self.unicode else f"[WARN] {tr(message)}", "warn", raw=True)
 
     def error(self, message: str) -> None:
-        self.text(f"{self.glyph('bad')} {message}" if self.unicode else f"[ERROR] {message}", "bad")
+        self.text(f"{self.glyph('bad')} {tr(message)}" if self.unicode else f"[ERROR] {tr(message)}", "bad", raw=True)
 
     def info(self, message: str) -> None:
         self.text(message, "dim")
 
     def bullet(self, message: str, style: str | None = None) -> None:
-        self.text(f"  • {message}" if self.unicode else f"  - {message}", style)
+        self.text(f"  • {tr(message)}" if self.unicode else f"  - {tr(message)}", style, raw=True)
 
     def glyph(self, kind: str) -> str:
         """Status mark that degrades to ASCII on terminals without UTF-8."""
@@ -93,6 +122,7 @@ class UI:
         self.text(("─" if self.unicode else "-") * self.width, "dim")
 
     def heading(self, title: str, subtitle: str | None = None) -> None:
+        title, subtitle = tr(title), (tr(subtitle) if subtitle else None)
         if self.rich and self.unicode:
             body = Text(title, style="bold", justify="center")
             if subtitle:
@@ -101,23 +131,24 @@ class UI:
             return
         bar = "+" + "-" * (self.width - 2) + "+"
         self.text(bar)
-        self.text("|" + title.center(self.width - 2) + "|")
+        self.text("|" + center(title, self.width - 2) + "|", raw=True)
         if subtitle:
-            self.text("|" + subtitle.center(self.width - 2) + "|")
+            self.text("|" + center(subtitle, self.width - 2) + "|", raw=True)
         self.text(bar)
 
     def section(self, title: str) -> None:
         self.text("")
-        self.text(f" {title.upper()}", "title")
+        self.text(f" {tr(title).upper()}", "title", raw=True)
         self.rule()
 
     # ---- structured output -------------------------------------------------
     def kv(self, rows: Iterable[tuple[str, Any, str | None]], label_width: int = 24) -> None:
         for label, value, style in rows:
-            line = f" {label:<{label_width}} {value}"
-            self.text(line, style)
+            shown = tr(value, record=False) if isinstance(value, str) else value  # values are mostly data; the static scan covers templates
+            self.text(f" {pad(tr(label), label_width)} {shown}", style, raw=True)
 
     def table(self, headers: Sequence[str], rows: Sequence[Sequence[Any]], styles: Sequence[str | None] | None = None) -> None:
+        headers = [tr(h) for h in headers]
         if not rows:
             self.info("  (none)")
             return
@@ -130,21 +161,20 @@ class UI:
                 t.add_row(*[Text(str(c), style=st) for c in row])
             self.console.print(t)
             return
-        widths = [max(len(str(h)), *(len(str(r[i])) for r in rows)) for i, h in enumerate(headers)]
-        fmt = "  ".join(f"{{:<{w}}}" for w in widths)
-        self.text(fmt.format(*headers), "title")
+        widths = [max(display_width(str(h)), *(display_width(str(r[i])) for r in rows)) for i, h in enumerate(headers)]
+        self.text("  ".join(pad(str(h), w) for h, w in zip(headers, widths, strict=True)), "title", raw=True)
         for r in rows:
-            self.text(fmt.format(*[str(c) for c in r]))
+            self.text("  ".join(pad(str(c), w) for c, w in zip(r, widths, strict=True)), raw=True)
 
     def menu(self, items: Sequence[tuple[str, str]]) -> None:
         for key, label in items:
-            self.text(f" {key:>2}. {label}")
+            self.text(f" {key:>2}. {tr(label)}", raw=True)
 
     # ---- input -------------------------------------------------------------
-    def ask(self, prompt: str, default: str | None = None) -> str:
+    def ask(self, prompt: str, default: str | None = None, *, translate: bool = True) -> str:
         suffix = f" [{default}]" if default else ""
         try:
-            answer = self._input(f"{prompt}{suffix}: ").strip()
+            answer = self._input(f"{tr(prompt) if translate else prompt}{suffix}: ").strip()
         except (EOFError, KeyboardInterrupt):
             self.text("")
             raise Abort from None
@@ -155,18 +185,18 @@ class UI:
             return True
         hint = "Y/n" if default else "y/N"
         while True:
-            answer = self.ask(f"{prompt} ({hint})").lower()
+            answer = self.ask(f"{tr(prompt)} ({hint})", translate=False).lower()
             if not answer:
                 return default
-            if answer in ("y", "yes"):
+            if answer in YES_WORDS:
                 return True
-            if answer in ("n", "no"):
+            if answer in NO_WORDS:
                 return False
             self.text("Please answer yes or no.", "warn")
 
     def pause(self) -> None:
         try:
-            self._input("\nPress Enter to continue...")
+            self._input("\n" + tr("Press Enter to continue..."))
         except (EOFError, KeyboardInterrupt):
             raise Abort from None
 

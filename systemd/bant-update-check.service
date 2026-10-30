@@ -1,0 +1,16 @@
+[Unit]
+Description=Bant: check GitHub for a newer release (check only - never installs anything)
+Documentation=https://github.com/VAR7IANT/Bant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# "-": a failed check (e.g. no internet) must not mark the unit as failed.
+ExecStart=-/usr/local/bin/bant self-update check --quiet
+Nice=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bant /var/log/bant

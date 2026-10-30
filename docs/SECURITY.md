@@ -39,6 +39,31 @@ invariants it enforces, how they are tested, and what it deliberately does not d
 11. **Secrets.** The audit trail redacts private keys and values under sensitive keys; backups exclude
     host keys, `authorized_keys` and password databases.
 
+## Self-update
+
+`bant self-update` runs as root and installs code downloaded from the internet, so it is deliberately strict.
+
+- **Where from:** only `https://` URLs on `github.com` / `githubusercontent.com` hosts, for the fixed repository
+  `VAR7IANT/Bant`. Redirects are re-validated hop by hop. Size caps: 4 MiB API data, 30 MiB archive.
+- **Authenticity checks**, in order of preference:
+  1. the release asset `bant-<version>.tar.gz` verified against the release's `SHA256SUMS` asset (published automatically by
+     `.github/workflows/release.yml`);
+  2. otherwise GitHub's source archive of the release tag, accepted only if the commit id embedded in the archive equals the commit the
+     tag resolves to through the GitHub API (annotated tags are dereferenced).
+- **What this does *not* give you:** there are no cryptographic signatures yet. These checks catch corruption, truncated downloads and
+  tag/archive mix-ups; they do not protect against a compromised GitHub account or release. If you need more assurance, install from a
+  `git clone` and verify the commit yourself.
+- **Safe extraction:** the archive is unpacked by Bant's own extractor into a root-only directory; absolute paths, `..`, symlinks, hard
+  links, devices, more than one top-level directory, or implausible sizes abort the update. Permissions are normalised (no setuid).
+- **Declared version must match:** the version in the archive's `bant/__init__.py` (read as text, not executed) must equal the release,
+  and `install.sh` must pass `bash -n`.
+- **Reversible:** configuration is backed up first, the running version is kept as `/opt/bant/lib.prev`, and the installed version and the
+  new `bant` command are verified afterwards; any failure restores the previous program directory automatically.
+  `bant self-update rollback` does the same on demand.
+- **Never automatic:** the optional daily timer (`bant-update-check.timer`) only *checks* and records the result; it never installs.
+  Disable it with `sudo bant self-update notify off` or `install.sh --no-update-check`. An update is refused while an SSH change is
+  pending confirmation.
+
 ## Limits you should know about
 
 - **Provider firewalls** cannot be seen from inside the server. The confirm step is the safeguard.

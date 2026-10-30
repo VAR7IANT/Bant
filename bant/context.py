@@ -91,6 +91,8 @@ class Context:
         sleep: Callable[[float], None] = time.sleep,
         banner_probe: Callable[[str, int], str | None] | None = None,
         rng: random.Random | None = None,
+        home: Path | None = None,
+        http_get: Callable[[str, int, str], bytes] | None = None,
     ):
         self.paths = paths or Paths()
         self.runner = runner or Runner()
@@ -104,6 +106,8 @@ class Context:
         self.audit_log = AuditLog(self.paths.audit_log, clock=clock, mirror_syslog=mirror_syslog)
         self.sleep = sleep
         self.rng = rng or random.SystemRandom()
+        self._home = home
+        self.http_get = http_get  # None = real HTTPS (bant.core.updater.fetch); tests inject a fake GitHub
         self.banner_probe = banner_probe or _tcp_banner
         self.planned: list[str] = []
         self._memo: dict[str, Any] | None = None
@@ -118,6 +122,21 @@ class Context:
     def require_root(self, action: str = "This operation") -> None:
         if not self.is_root:
             raise PermissionDenied(f"{action} requires root privileges.", hint="Re-run with sudo.")
+
+    def user_homes(self) -> list[Path]:
+        """Home directories whose personal Bant preferences apply: ours first, then the sudo caller's."""
+        if self._home is not None:
+            return [self._home]
+        homes = [Path.home()]
+        sudo_user = os.environ.get("SUDO_USER")
+        if sudo_user and sudo_user != "root":
+            try:
+                import pwd
+
+                homes.append(Path(pwd.getpwnam(sudo_user).pw_dir))
+            except (KeyError, ImportError):
+                pass
+        return homes
 
     # ---- config ----------------------------------------------------------
     @property

@@ -141,7 +141,8 @@ def _detect(ctx: Context) -> FirewallInfo:
             if parsed["count"] > 0 or parsed["policy"] != "ACCEPT":
                 info.backend, info.active, info.mode = "iptables", True, "manage"
                 info.restrictive = parsed["restrictive"]
-                info.detail = "iptables rules present" + (" (inbound filtered by default)." if parsed["restrictive"] else ".")
+                info.detail = ("iptables rules present (inbound filtered by default)." if parsed["restrictive"]
+                               else "iptables rules present.")
                 return info
     if not ctx.is_root:
         info.mode = "observe"

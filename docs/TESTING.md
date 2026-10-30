@@ -48,6 +48,14 @@ console access. Record results in the release notes before tagging anything stab
 - [ ] Journald-only server (no `/var/log/auth.log`) and rsyslog server both detect failures
 - [ ] An existing custom jail and `jail.local` are untouched; conflicting `[sshd]` keys are reported
 
+**Language and updates**
+- [ ] First `sudo bant` asks for a language; choosing 繁體中文 persists and every menu/screen is Chinese; `sudo bant lang en` switches back
+- [ ] Over SSH with a UTF-8 terminal the box drawing and Chinese text render correctly; on the provider's text console (`TERM=linux`) Bant shows English
+- [ ] After publishing a newer release: `bant self-update check` sees it, the dashboard shows the banner after the daily timer ran,
+      `sudo bant self-update` installs it, `bant version` shows the new number, `self-update rollback` returns to the old one
+- [ ] Update while an SSH change is pending is refused; a tampered `SHA256SUMS`/asset is refused (try on a test fork)
+- [ ] `systemctl list-timers | grep bant-update` shows the daily check; `systemctl status bant-update-check.service` is not "failed" without internet
+
 **Coexistence**
 - [ ] With Docker, sing-box/Xray (TCP+UDP), Caddy running: no connectivity change, no rule or sysctl changes (compare `nft list ruleset`, `iptables-save`, `sysctl -a` before/after, ignoring Bant's own entries)
 

@@ -14,6 +14,7 @@
 #   --no-setup              install files only; do not run `bant setup`
 #   --no-ssh-migration      skip the SSH port migration
 #   --no-fail2ban           skip Fail2ban installation/configuration
+#   --no-update-check       do not enable the daily check for new Bant releases (check only, never installs)
 #   --ssh-port PORT|random  SSH port to use (default: a random free port; an existing custom port is kept)
 #   --minutes N             rollback window in minutes (default 10)
 #   --force-unsupported     continue on a distribution Bant does not officially support
@@ -46,6 +47,7 @@ while [ $# -gt 0 ]; do
     --no-setup) RUN_SETUP=0 ;;
     --no-ssh-migration) SETUP_ARGS+=(--no-ssh-migration) ;;
     --no-fail2ban) SETUP_ARGS+=(--no-fail2ban) ;;
+    --no-update-check) SETUP_ARGS+=(--no-update-check) ;;
     --ssh-port) [ $# -ge 2 ] || die "--ssh-port needs a value"; SETUP_ARGS+=(--ssh-port "$2"); shift ;;
     --minutes) [ $# -ge 2 ] || die "--minutes needs a value"; SETUP_ARGS+=(--minutes "$2"); shift ;;
     --force-unsupported) FORCE_UNSUPPORTED=1 ;;
@@ -135,7 +137,9 @@ LAUNCHER
   chmod 0755 "$launcher_tmp"
   mv -f "$launcher_tmp" "$DESTDIR$BIN"
   install -d -m 0755 "$DESTDIR$UNIT_DIR"
-  install -m 0644 "$SRC_DIR/systemd/bant-firewall.service" "$DESTDIR$UNIT_DIR/bant-firewall.service"
+  for unit in bant-firewall.service bant-update-check.service bant-update-check.timer; do
+    install -m 0644 "$SRC_DIR/systemd/$unit" "$DESTDIR$UNIT_DIR/$unit"
+  done
   install -d -m 0755 "$DESTDIR/etc/bant"
   install -d -m 0700 "$DESTDIR/var/lib/bant"
   install -d -m 0750 "$DESTDIR/var/log/bant"
