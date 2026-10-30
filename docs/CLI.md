@@ -92,7 +92,7 @@ Internal commands used by systemd (`_tx-finish`, `_fw-apply`) are not part of th
 
 ```bash
 sudo bant ssh port random --dry-run       # preview the plan
-sudo bant ssh port 2222                   # use your own port
+sudo bant ssh port 667                    # use your own port (any free port 1-65535)
 bant status --json | jq .fail2ban.state
 sudo bant fail2ban set bantime 1d
 sudo bant firewall block 203.0.113.0/24 --duration 7d --reason "scanner"

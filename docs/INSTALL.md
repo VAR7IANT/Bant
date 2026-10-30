@@ -38,7 +38,8 @@ duplicated, no duplicate directives/rules/units are created.
 (`--ssh-port N` / `bant ssh port N`); otherwise the port from `/etc/bant/bant.toml` if set; otherwise, if SSH already
 runs on a single non-22 port, that port is kept (no needless move); otherwise a **random free port** is chosen. It is drawn
 from 10240-65535, never from the kernel's ephemeral (outgoing-connection) range, never one that anything already listens
-on (TCP or UDP), and never a handful of well-known application ports. On an interactive install you see the proposal and
+on (TCP or UDP), and never a handful of well-known application ports. To always use a fixed port such as 667, pass `--ssh-port 667`, or put `port = 667` under `[ssh]` in `/etc/bant/bant.toml`
+(then every `bant setup` uses it). On an interactive install you see the proposal and
 can press Enter, type your own port, or type `r` for another random one. The chosen port is remembered, so re-running
 after an interrupted or rolled-back attempt proposes the same port.
 

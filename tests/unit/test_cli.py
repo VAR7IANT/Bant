@@ -314,3 +314,33 @@ def test_tui_confirm_is_case_insensitive(host):
     assert ui.confirm("ok?") is True
     ui = UI(stream=io.StringIO(), color=False, force_plain=True, input_fn=lambda p="": "No")
     assert ui.confirm("ok?", True) is False
+
+
+# ---- the original fixed port, 667, must remain selectable through every entry point ---------
+
+@pytest.mark.parametrize("argv", [["setup", "--ssh-port", "667"], ["ssh", "port", "667", "--yes"]])
+def test_port_667_can_be_chosen_via_cli(host, argv):
+    rc, out = run(host, *argv)
+    assert rc == 0 and migration.describe_pending(host.make_ctx())["target"] == 667
+    assert set(host.listening) == {22, 667}
+
+
+def test_port_667_can_be_chosen_in_the_interactive_prompt(host, monkeypatch):
+    monkeypatch.setattr("sys.stdin", type("T", (), {"isatty": lambda self: True})())
+    rc, _ = run(host, "setup", stdin=["667"])
+    assert rc == 0 and migration.describe_pending(host.make_ctx())["target"] == 667
+
+
+def test_port_667_can_be_the_persistent_default_from_the_config_file(host):
+    host.paths.config_file.parent.mkdir(parents=True, exist_ok=True)
+    host.paths.config_file.write_text("[ssh]\nport = 667\n")
+    rc, out = run(host, "setup", "--yes")
+    assert rc == 0 and migration.describe_pending(host.make_ctx())["target"] == 667
+    assert "from your Bant configuration" in out
+
+
+def test_port_667_full_cycle_ends_with_ssh_only_on_667(host):
+    run(host, "ssh", "port", "667", "--yes")
+    host.add_ssh_session("alice", 667, "203.0.113.7", 50001)
+    rc, _ = run(host, "ssh", "confirm")
+    assert rc == 0 and set(host.listening) == {667} and host.make_ctx().config.ssh_port == 667

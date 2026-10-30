@@ -25,7 +25,7 @@ console access. Record results in the release notes before tagging anything stab
 **Install**
 - [ ] `sudo bash install.sh` finishes; `bant` is in PATH; summary says migration *pending*
 - [ ] `ss -ltn` shows 22 **and** the printed random port (outside 32768-60999); `bant status` shows a countdown
-- [ ] `install.sh --ssh-port 2222` and the interactive prompt (Enter / own number / `r`) behave as documented
+- [ ] `install.sh --ssh-port 667` (and `port = 667` in bant.toml) migrates to 667; the interactive prompt (Enter / own number / `r`) behave as documented
 - [ ] A host that already uses a custom port (e.g. 2222) keeps it
 - [ ] Re-run `install.sh`: no duplicate rules/units/directives; still one transaction
 

@@ -32,7 +32,7 @@ sudo bash install.sh
 
 The installer installs Bant, registers `/usr/local/bin/bant`, installs and configures Fail2ban, and
 **starts** (does not finish) the migration of SSH to a **random free port** - or to the port you choose
-(`sudo bash install.sh --ssh-port 2222`, or type your own at the interactive prompt):
+(`sudo bash install.sh --ssh-port 667`, or any other port; you can also type your own at the interactive prompt):
 
 1. SSH listens on the old port **and** the new one; the firewall allows it; Fail2ban protects both.
    The installer prints the chosen port - note it, and allow it in your provider's firewall if it has one.
