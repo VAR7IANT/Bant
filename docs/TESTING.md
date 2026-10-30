@@ -24,17 +24,19 @@ console access. Record results in the release notes before tagging anything stab
 
 **Install**
 - [ ] `sudo bash install.sh` finishes; `bant` is in PATH; summary says migration *pending*
-- [ ] `ss -ltn` shows 22 **and** 667; `bant status` shows a countdown
+- [ ] `ss -ltn` shows 22 **and** the printed random port (outside 32768-60999); `bant status` shows a countdown
+- [ ] `install.sh --ssh-port 2222` and the interactive prompt (Enter / own number / `r`) behave as documented
+- [ ] A host that already uses a custom port (e.g. 2222) keeps it
 - [ ] Re-run `install.sh`: no duplicate rules/units/directives; still one transaction
 
 **Migration**
-- [ ] New session `ssh -p 667` works; `sudo bant ssh confirm` succeeds; 22 stops listening; existing sessions survive
+- [ ] New session `ssh -p <PORT>` works; `sudo bant ssh confirm` succeeds; 22 stops listening; existing sessions survive
 - [ ] Same flow on Ubuntu 24.04 with `ssh.socket` (socket drop-in) and on a host with a custom `Port 2222`
 - [ ] Do nothing for the deadline: SSH returns to the original state; repeat with `kill -9` of the installer and with a reboot before the deadline
-- [ ] Provider firewall closed on 667: confirm fails, rollback restores
-- [ ] Port 667 occupied by `nc -l 667`: refused with explanation
+- [ ] Provider firewall closed on the new port: confirm fails, rollback restores
+- [ ] Chosen port occupied by `nc -l <PORT>`: refused with explanation; `random` never picks it
 - [ ] Confirm from the *old* session without a new login: refused
-- [ ] ufw active / firewalld active / nftables default-drop / iptables default-drop: 667 reachable, rule removable with `bant firewall remove 667`, admin rules untouched
+- [ ] ufw active / firewalld active / nftables default-drop / iptables default-drop: the new port reachable, rule removable with `bant firewall remove <PORT>`, admin rules untouched
 
 **Authentication**
 - [ ] `password off` refused when logged in with a password; accepted after a key login; new key session needed to confirm; password login then fails
@@ -50,5 +52,5 @@ console access. Record results in the release notes before tagging anything stab
 - [ ] With Docker, sing-box/Xray (TCP+UDP), Caddy running: no connectivity change, no rule or sysctl changes (compare `nft list ruleset`, `iptables-save`, `sysctl -a` before/after, ignoring Bant's own entries)
 
 **Lifecycle**
-- [ ] `backup`/`restore` round trip; `repair`; `uninstall` leaves SSH on 667, Fail2ban active, only Bant rules removed
+- [ ] `backup`/`restore` round trip; `repair`; `uninstall` leaves SSH on its new port, Fail2ban active, only Bant rules removed
 - [ ] `emergency-recovery.sh rollback|restore-ssh|open-port` from the provider console

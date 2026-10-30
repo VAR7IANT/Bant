@@ -31,14 +31,16 @@ sudo bash install.sh
 ```
 
 The installer installs Bant, registers `/usr/local/bin/bant`, installs and configures Fail2ban, and
-**starts** (does not finish) the migration of SSH to TCP **667**:
+**starts** (does not finish) the migration of SSH to a **random free port** - or to the port you choose
+(`sudo bash install.sh --ssh-port 2222`, or type your own at the interactive prompt):
 
-1. SSH listens on the old port **and** 667; the firewall allows 667; Fail2ban protects both.
-2. Open a **new** terminal: `ssh -p 667 you@your-server`
+1. SSH listens on the old port **and** the new one; the firewall allows it; Fail2ban protects both.
+   The installer prints the chosen port - note it, and allow it in your provider's firewall if it has one.
+2. Open a **new** terminal: `ssh -p <new-port> you@your-server`
 3. Run `sudo bant ssh confirm`. Bant verifies that new session on the server, removes the old
-   listener, narrows Fail2ban to 667 and disarms the rollback timer.
+   listener, narrows Fail2ban to the new port and disarms the rollback timer.
 
-If you do nothing, everything reverts after ~10 minutes. If a provider/cloud firewall blocks 667,
+If you do nothing, everything reverts after ~10 minutes. If a provider/cloud firewall blocks the new port,
 the new connection simply times out and the rollback restores the original state. See
 [`docs/INSTALL.md`](docs/INSTALL.md).
 
@@ -47,6 +49,7 @@ the new connection simply times out and the rollback restores the original state
 ```text
 sudo bant                      interactive menu (read-only without root)
 bant status | doctor | audit   what is installed, running, and actually verified
+sudo bant ssh port random|N    move SSH to a random free port, or to port N (safe migration)
 sudo bant ssh password off     only after a verified key login; with automatic rollback
 sudo bant fail2ban ban <IP>    ban / unban, trusted IPs, jail tuning
 sudo bant firewall allow 8443  Bant-owned, removable allowances

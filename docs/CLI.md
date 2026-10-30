@@ -45,7 +45,7 @@ and fails with exit code 3 *before* doing anything otherwise.
 |---|---|
 | `bant ssh` / `bant ssh status` | listeners, activation mode, effective auth settings, Match overrides, pending change |
 | `bant ssh port` | show current port(s) |
-| `sudo bant ssh port 667 [--minutes N]` | start the safe migration (see INSTALL.md) |
+| `sudo bant ssh port N\|random [--minutes N]` | start the safe migration to port N, or to a random free port (see INSTALL.md) |
 | `sudo bant ssh confirm` | after logging in through the **new** path: verify server-side, then finalise |
 | `sudo bant ssh rollback` | undo a pending change now |
 | `sudo bant ssh extend [MIN]` | push the rollback deadline out |
@@ -83,7 +83,7 @@ and fails with exit code 3 *before* doing anything otherwise.
 | `sudo bant backup [--note T] [--list]` | checksummed snapshot of SSH, Fail2ban, Bant, ufw, nftables and apt settings (no host keys/secrets) |
 | `sudo bant restore [ID\|latest] [--list]` | validated restore; snapshot first; undoes itself on failure |
 | `sudo bant repair` | fix permissions, clean/re-arm timers, roll back overdue changes, re-apply policy |
-| `sudo bant setup [--no-ssh-migration] [--no-fail2ban] [--ssh-port N]` | what the installer runs; resumable |
+| `sudo bant setup [--no-ssh-migration] [--no-fail2ban] [--ssh-port N\|random]` | what the installer runs; resumable. Default port: random (asks interactively; keeps an existing custom port) |
 | `sudo bant uninstall [--purge] [--remove-fail2ban-config] [--dry-run]` | see INSTALL.md |
 
 Internal commands used by systemd (`_tx-finish`, `_fw-apply`) are not part of the public interface.
@@ -91,7 +91,8 @@ Internal commands used by systemd (`_tx-finish`, `_fw-apply`) are not part of th
 ## Examples
 
 ```bash
-sudo bant ssh port 667 --dry-run          # preview the plan
+sudo bant ssh port random --dry-run       # preview the plan
+sudo bant ssh port 2222                   # use your own port
 bant status --json | jq .fail2ban.state
 sudo bant fail2ban set bantime 1d
 sudo bant firewall block 203.0.113.0/24 --duration 7d --reason "scanner"

@@ -34,26 +34,33 @@ duplicated, no duplicate directives/rules/units are created.
 
 ## The SSH migration, step by step
 
-`bant setup` (or `sudo bant ssh port 667`) performs:
+`bant setup` (or `sudo bant ssh port random|N`) performs the steps below. **Which port?** In order: a port you pass
+(`--ssh-port N` / `bant ssh port N`); otherwise the port from `/etc/bant/bant.toml` if set; otherwise, if SSH already
+runs on a single non-22 port, that port is kept (no needless move); otherwise a **random free port** is chosen. It is drawn
+from 10240-65535, never from the kernel's ephemeral (outgoing-connection) range, never one that anything already listens
+on (TCP or UDP), and never a handful of well-known application ports. On an interactive install you see the proposal and
+can press Enter, type your own port, or type `r` for another random one. The chosen port is remembered, so re-running
+after an interrupted or rolled-back attempt proposes the same port.
+
 
 | # | Step | If it fails |
 |---|------|-------------|
 | 1 | Inspect OS, sshd, `ssh.socket`, Include/drop-ins, listeners, firewall | refuses with the reason |
-| 2 | Refuse if TCP 667 is used by another program (offer another port) | nothing changed |
+| 2 | Refuse if the chosen TCP port is used by another program (a random choice already avoids busy ports) | nothing changed |
 | 3 | Back up files; open a transaction; **arm the persistent rollback timer** | nothing changed |
-| 4 | Allow 667 in the active firewall (ufw/firewalld/nft/iptables) | automatic rollback |
+| 4 | Allow the new port in the active firewall (ufw/firewalld/nft/iptables) | automatic rollback |
 | 5 | Update Fail2ban to protect old+new port, validate with `fail2ban-client -t` | automatic rollback |
 | 6 | Configure sshd (drop-in `00-bant.conf`, or an `ssh.socket` drop-in), `sshd -t`, reload | automatic rollback |
-| 7 | Verify 667 listens and answers with an SSH banner; old port still listens | automatic rollback |
-| 8 | **You** log in on 667 from a new terminal and run `sudo bant ssh confirm` | timer rolls back |
-| 9 | Server-side check that a new, authenticated, non-local session arrived on 667 after step 3 | stays pending |
+| 7 | Verify the new port listens and answers with an SSH banner; old port still listens | automatic rollback |
+| 8 | **You** log in on the new port from a new terminal and run `sudo bant ssh confirm` | timer rolls back |
+| 9 | Server-side check that a new, authenticated, non-local session arrived on the new port after step 3 | stays pending |
 | 10 | Remove old listener (comment-out `Port` lines Bant didn't write), narrow Fail2ban, verify | automatic rollback |
 | 11 | Disarm timer; record rules Bant created; mark migration complete | - |
 
 Commands while a migration is pending: `bant status`, `sudo bant ssh confirm`,
 `sudo bant ssh rollback`, `sudo bant ssh extend 10`.
 
-**Provider firewalls.** Cloud security groups are outside the server's view. Allow TCP 667 there
+**Provider firewalls.** Cloud security groups are outside the server's view. Allow the new TCP port there
 *before* confirming. If you forget, the new login times out and the rollback restores access.
 
 **Not supported automatically** (Bant explains and stops): `ListenAddress` lines that pin a port

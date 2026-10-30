@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_SSH_PORT = 667
+AUTO_SSH_PORT = 0  # config value meaning "pick a random free port the first time SSH is moved"
 DEFAULT_ROLLBACK_MINUTES = 10
 BANT_TAG = "bant"  # appears in comments of rules Bant adds; never the sole ownership proof
 

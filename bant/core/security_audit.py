@@ -13,7 +13,6 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from bant.constants import DEFAULT_SSH_PORT
 from bant.context import Context
 from bant.core import backups, fail2ban, firewall, migration, netinfo, ssh, updates
 from bant.core.rollback import TxManager
@@ -60,8 +59,8 @@ def _ssh_checks(ctx: Context) -> list[Finding]:
     if ports == [22]:
         out.append(Finding("SSH-010", "low", "SSH is on the default port 22", "listening on 22",
                            "Default-port SSH receives the bulk of automated scanning and brute-force traffic",
-                           f"Move SSH to TCP {DEFAULT_SSH_PORT} safely with `sudo bant ssh port {DEFAULT_SSH_PORT}`.",
-                           True, f"sudo bant ssh port {DEFAULT_SSH_PORT}"))
+                           "Move SSH to a random free port safely with `sudo bant ssh port random`, or pick your own: `sudo bant ssh port <PORT>`.",
+                           True, "sudo bant ssh port random"))
     elif len(ports) > 1:
         out.append(Finding("SSH-011", "low", "SSH listens on multiple ports", f"ports {ports}",
                            "Extra listeners widen the attack surface", "Remove ports you no longer need.", False))

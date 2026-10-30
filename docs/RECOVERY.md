@@ -60,8 +60,9 @@ Pre-change copies of every file Bant touched live in `/var/lib/bant/tx/<id>/back
 
 ## 6. Provider firewall
 
-If `ssh -p 667` times out but `ss -ltn` on the console shows sshd listening on 667, the block is
-outside the server: add an inbound TCP 667 rule in your provider's firewall/security group.
+If `ssh -p <PORT>` times out but `ss -ltn` on the console shows sshd listening on that port, the block is
+outside the server: add an inbound TCP rule for it in your provider's firewall/security group.
+Forgot which port Bant chose? `ss -ltnp | grep sshd` on the console, or `sudo bant ssh status`.
 
 ## 7. Banned yourself?
 

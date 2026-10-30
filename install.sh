@@ -5,7 +5,8 @@
 #
 # Installs Bant, registers the global `bant` command and runs `bant setup`, which
 #   * installs/configures Fail2ban for SSH,
-#   * starts a SAFE migration of SSH to TCP 667 (old port stays open, automatic rollback armed),
+#   * starts a SAFE migration of SSH to a RANDOM free port (or the port you choose); the old port stays
+#     open and an automatic rollback is armed,
 #   * leaves the final switch to you: log in on the new port, then run `sudo bant ssh confirm`.
 #
 # Options:
@@ -13,7 +14,7 @@
 #   --no-setup              install files only; do not run `bant setup`
 #   --no-ssh-migration      skip the SSH port migration
 #   --no-fail2ban           skip Fail2ban installation/configuration
-#   --ssh-port PORT         target SSH port instead of 667
+#   --ssh-port PORT|random  SSH port to use (default: a random free port; an existing custom port is kept)
 #   --minutes N             rollback window in minutes (default 10)
 #   --force-unsupported     continue on a distribution Bant does not officially support
 #   --dry-run               print what would be done and exit
@@ -37,7 +38,7 @@ warn() { printf '\033[1;33m[bant] WARNING:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[bant] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 run()  { if [ "$DRY_RUN" -eq 1 ]; then printf '  would run: %s\n' "$*"; else "$@"; fi; }
 
-usage() { sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -151,6 +152,7 @@ fi
 # ---- setup ------------------------------------------------------------------
 if [ "$RUN_SETUP" -eq 1 ] && [ -z "$DESTDIR" ]; then
   log "Running initial setup (baseline, Fail2ban, SSH migration)..."
+  if [ "$ASSUME_YES" -eq 1 ]; then SETUP_ARGS+=(--yes); fi
   if [ "$DRY_RUN" -eq 1 ]; then
     printf '  would run: %s setup %s\n' "$BIN" "${SETUP_ARGS[*]:-}"
   else

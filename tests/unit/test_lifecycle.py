@@ -2,14 +2,14 @@
 
 import pytest
 
-from bant.core import backups, fail2ban, firewall, migration, repair, setup, sshconf, uninstall
+from bant.core import backups, fail2ban, firewall, migration, ports, repair, setup, sshconf, uninstall
 from bant.core.rollback import TxManager
 from bant.errors import OperationFailed, PermissionDenied
 from tests.fakes import FakeHost
 
 
 def test_setup_fresh_server_leaves_pending_confirmation(host, ctx):
-    rep = setup.run(ctx)
+    rep = setup.run(ctx, port=667)
     steps = {s["step"]: s for s in rep["steps"]}
     assert steps["baseline"]["status"] == "done" and steps["fail2ban"]["status"] == "done"
     assert steps["ssh-migration"]["status"] == "pending"
@@ -22,7 +22,7 @@ def test_setup_fresh_server_leaves_pending_confirmation(host, ctx):
 
 
 def test_setup_is_idempotent_while_pending(host, ctx):
-    setup.run(ctx)
+    setup.run(ctx, port=667)
     jail = ctx.paths.f2b_jail.read_text()
     dropin = ctx.paths.ssh_dropin.read_text()
     tx_before = [t.id for t in TxManager(ctx).pending()]
@@ -34,7 +34,7 @@ def test_setup_is_idempotent_while_pending(host, ctx):
 
 
 def test_setup_complete_after_confirm_then_rerun_changes_nothing(host, ctx):
-    setup.run(ctx)
+    setup.run(ctx, port=667)
     host.add_ssh_session("alice", 667, "203.0.113.7", 50001)
     migration.confirm(ctx)
     snapshot = (ctx.paths.ssh_dropin.read_text(), ctx.paths.f2b_jail.read_text())
@@ -46,7 +46,7 @@ def test_setup_complete_after_confirm_then_rerun_changes_nothing(host, ctx):
 
 def test_setup_port_conflict_is_reported_not_forced(host, ctx):
     host.listening[667] = "caddy"
-    rep = setup.run(ctx)
+    rep = setup.run(ctx, port=667)
     mig = next(s for s in rep["steps"] if s["step"] == "ssh-migration")
     assert mig["status"] == "skipped" and "caddy" in mig["detail"]
     assert rep["outcome"] == "incomplete"
@@ -56,7 +56,7 @@ def test_setup_port_conflict_is_reported_not_forced(host, ctx):
 def test_setup_preserves_password_and_root_policy(host, ctx):
     cfg = ctx.paths.sshd_config
     cfg.write_text(cfg.read_text() + "PasswordAuthentication yes\nPermitRootLogin yes\n")
-    setup.run(ctx)
+    setup.run(ctx, port=667)
     eff = sshconf.effective(ctx)
     assert eff.flag("passwordauthentication") and eff.one("permitrootlogin") == "yes"
 
@@ -77,7 +77,7 @@ def test_setup_without_openssh_skips_ssh(tmp_path):
 def test_setup_runs_with_firewall_ufw(tmp_path):
     host = FakeHost(tmp_path / "r", ufw=True)
     ctx = host.make_ctx()
-    setup.run(ctx)
+    setup.run(ctx, port=667)
     assert "667/tcp" in host.ufw_rules and "22/tcp" not in host.ufw_rules  # old port rule untouched/not invented
 
 
@@ -178,7 +178,7 @@ def test_repair_nothing_to_do(host, ctx):
 # ---- uninstall -----------------------------------------------------------------
 
 def _installed_and_confirmed(host, ctx):
-    setup.run(ctx)
+    setup.run(ctx, port=667)
     host.add_ssh_session("alice", 667, "203.0.113.7", 50001)
     migration.confirm(ctx)
     ctx.paths.launcher.write_text("#!/bin/sh\n")
@@ -212,7 +212,7 @@ def test_uninstall_removes_only_registry_firewall_rules(tmp_path):
 
 
 def test_uninstall_refused_with_pending_transaction(host, ctx):
-    setup.run(ctx)
+    setup.run(ctx, port=667)
     with pytest.raises(OperationFailed, match="pending"):
         uninstall.run(ctx)
 
@@ -234,3 +234,90 @@ def test_uninstall_dry_run_changes_nothing(host, ctx):
     ctx.dry_run = True
     out = uninstall.run(ctx)
     assert out["dry_run"] and ctx.paths.ssh_dropin.exists() and ctx.paths.launcher.exists()
+
+
+# ---- default: random port, user-overridable ------------------------------------------------
+
+def test_setup_default_is_a_random_free_port_not_22_not_667(host, ctx):
+    rep = setup.run(ctx)
+    port = rep["ssh_port"]
+    assert rep["port_source"] == "random" and rep["outcome"] == "pending_confirmation"
+    assert 10240 <= port <= 65535 and port not in (22, 667)
+    assert not ports.in_ephemeral_range(ctx, port), "must stay clear of the kernel's outgoing-connection range"
+    assert set(host.listening) == {22, port}
+    assert rep["pending"]["target"] == port
+    assert any(f"allow inbound TCP {port}" in n for n in rep["next_steps"]), "provider-firewall reminder names the actual port"
+    assert any(f"ssh -p {port}" in n for n in rep["next_steps"])
+
+
+def test_setup_rerun_after_rollback_reuses_the_same_random_port(host, ctx):
+    first = setup.run(ctx)["ssh_port"]
+    from bant.core import repair
+    later = host.make_ctx(clock=lambda: 2000.0 + 3600)
+    repair.run(later)                     # deadline passed -> automatic rollback
+    assert not TxManager(ctx).pending() and set(host.listening) == {22}
+    again = setup.run(ctx)
+    assert again["ssh_port"] == first and again["port_source"] == "remembered"
+
+
+def test_user_can_choose_the_port(host, ctx):
+    rep = setup.run(ctx, port=2222)
+    assert rep["ssh_port"] == 2222 and rep["port_source"] == "requested"
+    assert set(host.listening) == {22, 2222}
+
+
+def test_user_can_ask_for_a_new_random_port_explicitly(host, ctx):
+    port, source = ports.resolve_target(ctx, "random")
+    assert source == "random" and port not in (22, 667)
+    other, _ = ports.resolve_target(ctx, "random")
+    assert 10240 <= other <= 65535
+
+
+def test_existing_custom_ssh_port_is_kept_not_randomised(host, ctx):
+    cfg = ctx.paths.sshd_config
+    cfg.write_text(cfg.read_text() + "Port 2222\n")
+    host.listening = {2222: "sshd"}
+    rep = setup.run(ctx)
+    assert rep["ssh_port"] == 2222 and rep["port_source"] == "existing"
+    assert next(s for s in rep["steps"] if s["step"] == "ssh-migration")["status"] == "done"
+    assert not TxManager(ctx).pending() and ctx.config.ssh_port == 2222
+    assert set(host.listening) == {2222}
+
+
+def test_config_port_is_authoritative_on_later_runs(host, ctx):
+    ctx.config.set("ssh", "port", 40123)
+    port, source = ports.resolve_target(ctx, None)
+    assert (port, source) == (40123, "config")
+
+
+def test_random_choice_avoids_busy_ports_and_ephemeral_range(host, ctx):
+    import random as _r
+    host.listening.update({p: "x" for p in range(10240, 10300)})
+    lo, hi = ports.ephemeral_range(ctx)
+    for seed in range(200):
+        c = host.make_ctx(rng=_r.Random(seed))
+        p = ports.pick_random(c)
+        assert 10240 <= p <= 65535 and not (lo <= p <= hi) and p not in host.listening and p not in ports.AVOID
+
+
+def test_random_choice_reads_the_real_ephemeral_range(host, ctx):
+    (host.paths.proc / "sys/net/ipv4").mkdir(parents=True)
+    (host.paths.proc / "sys/net/ipv4/ip_local_port_range").write_text("15000\t30000\n")
+    assert ports.ephemeral_range(ctx) == (15000, 30000)
+    import random as _r
+    for seed in range(100):
+        p = ports.pick_random(host.make_ctx(rng=_r.Random(seed)))
+        assert not 15000 <= p <= 30000
+
+
+def test_plan_warns_about_ephemeral_range_for_user_chosen_port(host, ctx):
+    plan = migration.plan(ctx, 40000)
+    assert any("ephemeral" in w for w in plan.warnings)
+    assert not any("ephemeral" in w for w in migration.plan(ctx, 20000).warnings)
+
+
+def test_requested_port_that_is_busy_is_still_a_blocker(host, ctx):
+    host.listening[2222] = "caddy"
+    assert any("caddy" in b for b in migration.plan(ctx, 2222).blockers)
+    port, _ = ports.resolve_target(ctx, "random")
+    assert port != 2222

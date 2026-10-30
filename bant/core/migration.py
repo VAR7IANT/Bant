@@ -1,4 +1,4 @@
-"""Safe SSH port migration (default: TCP 667).
+"""Safe SSH port migration (to a random free port by default, or the port you choose).
 
 Lifecycle of an `ssh-port` transaction:
 
@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from bant.context import Context
-from bant.core import fail2ban, firewall, netinfo, ssh, sshconf
+from bant.core import fail2ban, firewall, netinfo, ports, ssh, sshconf
 from bant.core.rollback import Transaction, TxManager
 from bant.errors import BantError, OperationFailed, RolledBack
 from bant.platform import detect_os, has_systemd
@@ -69,6 +69,9 @@ def plan(ctx: Context, target: int) -> PortPlan:
     osi = detect_os(ctx)
     if not osi.supported:
         p.warnings.append(f"{osi.pretty} is not an officially supported release; proceeding with extra care.")
+    if ports.in_ephemeral_range(ctx, target):
+        p.warnings.append(f"TCP {target} is inside the kernel's ephemeral range {ports.ephemeral_range(ctx)}: an outgoing connection could "
+                          "occasionally hold it when sshd starts. A port below that range (or `random`) is safer.")
     fw = firewall.detect(ctx)
     if fw.mode == "observe":
         p.warnings.append("Firewall is in observation-only mode: Bant cannot open the new port. "
@@ -126,6 +129,7 @@ def begin(ctx: Context, target: int, *, minutes: int | None = None) -> dict[str,
         if ctx.dry_run:
             return {"dry_run": True, "plan": p}
         st = ssh.status(ctx)
+        ports.remember(ctx, target)
         minutes = minutes or ctx.config.rollback_minutes
         dual = sorted(set(p.old_ports + [target]))
         txm = TxManager(ctx)
@@ -219,7 +223,7 @@ def confirm(ctx: Context) -> dict[str, Any]:
             if last is not None and last.status == "rolled_back":
                 raise OperationFailed(
                     f"The last SSH change ({last.kind}, {last.id}) was already rolled back - its deadline passed or it failed.",
-                    hint="Your previous configuration is active. Check `bant logs`, then start again (e.g. `sudo bant ssh port 667`).")
+                    hint="Your previous configuration is active. Check `bant logs`, then start again (e.g. `sudo bant ssh port random`).")
             raise OperationFailed("No SSH change is waiting for confirmation.", hint="Run `bant ssh` to see the current state.")
         ok, detail, sess = verify_new_session(ctx, tx)
         if not ok:

@@ -139,3 +139,10 @@ def test_tui_in_a_real_pty_starts_navigates_and_exits():
         except ChildProcessError:
             pass
     assert b"\x1b[" in buf, "colour/cursor escapes expected on a real terminal"
+
+
+def test_installer_help_documents_random_port_option():
+    res = subprocess.run(["bash", str(ROOT / "install.sh"), "--help"], capture_output=True, text=True)
+    assert res.returncode == 0
+    assert "--ssh-port PORT|random" in res.stdout and "--dry-run" in res.stdout and "-h, --help" in res.stdout
+    assert "667" not in res.stdout

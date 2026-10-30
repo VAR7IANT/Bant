@@ -14,6 +14,7 @@ from bant.core import (
     logs,
     migration,
     netinfo,
+    ports,
     repair,
     security_audit,
     ssh,
@@ -143,7 +144,9 @@ def ssh_view(ctx: Context, ui: UI) -> None:
 def ssh_port(ctx: Context, ui: UI) -> None:
     if not need_root(ctx, ui, "Changing the SSH port"):
         return
-    port = parse_port(ui.ask("New SSH port", str(ctx.config.ssh_port)))
+    port, source = ports.resolve_target(ctx, ui.ask("New SSH port (a number, or 'random')", "random"))
+    if source == "random":
+        ui.info(f"Random free port chosen: {port}")
     p = migration.plan(ctx, port)
     ui.section(f"Plan: move SSH to TCP {port}")
     for s in p.steps:
@@ -420,7 +423,7 @@ def logs_menu(ctx: Context, ui: UI) -> None:
 
 def settings_show(ctx: Context, ui: UI) -> None:
     c = ctx.config
-    ui.kv([("Default SSH port", c.ssh_port, None), ("Rollback window", f"{c.rollback_minutes} min", None), ("Fail2ban maxretry", c.maxretry, None),
+    ui.kv([("Bant-managed SSH port", c.ssh_port or "random (chosen on first setup)", None), ("Rollback window", f"{c.rollback_minutes} min", None), ("Fail2ban maxretry", c.maxretry, None),
            ("Fail2ban findtime", c.findtime, None), ("Fail2ban bantime", c.bantime, None), ("Trusted IPs", ", ".join(c.trusted_ips) or "-", None),
            ("Config file", str(ctx.paths.config_file), "dim")])
 

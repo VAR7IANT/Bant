@@ -9,6 +9,7 @@ of listening ports, so migrations can be exercised end-to-end.
 from __future__ import annotations
 
 import os
+import random
 import re
 import shlex
 import time
@@ -99,7 +100,8 @@ class FakeHost(Runner):
     def make_ctx(self, **kw) -> Context:
         clock = kw.pop("clock", None) or (lambda: 2000.0)
         ctx = Context(self.paths, self, euid=self.euid, clock=clock, config=Config.load(self.paths.config_file),
-                      sleep=lambda s: None, banner_probe=self.banner, mirror_syslog=False, **kw)
+                      sleep=lambda s: None, banner_probe=self.banner, mirror_syslog=False,
+                      rng=kw.pop("rng", None) or random.Random(1234), **kw)
         return ctx
 
     def banner(self, host: str, port: int) -> str | None:

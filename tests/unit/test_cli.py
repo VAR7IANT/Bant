@@ -222,14 +222,48 @@ def test_backup_restore_via_cli(host):
     assert rc == 0 and "Restored" in out
 
 
-def test_setup_via_cli_reports_pending(host):
+def test_setup_via_cli_reports_pending_with_random_port(host):
     rc, out = run(host, "setup")
+    pend = migration.describe_pending(host.make_ctx())
     assert rc == 0 and "NOT finished" in out and "ssh confirm" in out
-    assert migration.describe_pending(host.make_ctx())
+    assert pend["target"] not in (22, 667) and f"SSH port: {pend['target']}" in out and "random" in out
+
+
+def test_setup_via_cli_with_own_port(host):
+    rc, out = run(host, "setup", "--ssh-port", "2222")
+    assert rc == 0 and migration.describe_pending(host.make_ctx())["target"] == 2222 and "chosen by you" in out
+
+
+def test_setup_rejects_bad_port(host):
+    assert run(host, "setup", "--ssh-port", "99999")[0] == 4
+    assert run(host, "setup", "--ssh-port", "banana")[0] == 4
+
+
+def test_ssh_port_random_keyword(host):
+    rc, out = run(host, "ssh", "port", "random", "--yes")
+    pend = migration.describe_pending(host.make_ctx())
+    assert rc == 0 and "Random free port chosen" in out and pend["target"] not in (22, 667)
+    rc, out = run(host, "ssh", "port", "--json")
+    assert json.loads(out)["bant_port"] is None
+
+
+def test_setup_interactive_prompt_accept_reroll_or_own(host, monkeypatch):
+    monkeypatch.setattr("sys.stdin", type("T", (), {"isatty": lambda self: True})())
+    rc, out = run(host, "setup", stdin=["r", "70000", "31001"])
+    pend = migration.describe_pending(host.make_ctx())
+    assert rc == 0 and pend["target"] == 31001
+    assert "New random port" in out and "out of range" in out
+
+
+def test_setup_interactive_enter_accepts_the_proposed_random_port(host, monkeypatch):
+    monkeypatch.setattr("sys.stdin", type("T", (), {"isatty": lambda self: True})())
+    rc, out = run(host, "setup", stdin=[""])
+    proposed = int(out.split("random free port: ")[1].split()[0])
+    assert migration.describe_pending(host.make_ctx())["target"] == proposed
 
 
 def test_uninstall_via_cli_keeps_listener(host):
-    run(host, "setup")
+    run(host, "setup", "--ssh-port", "667")
     host.add_ssh_session("alice", 667, "203.0.113.7", 50001)
     run(host, "ssh", "confirm")
     rc, out = run(host, "uninstall", "--yes")
@@ -238,7 +272,7 @@ def test_uninstall_via_cli_keeps_listener(host):
 
 
 def test_uninstall_dry_run(host):
-    setup.run(host.make_ctx())
+    setup.run(host.make_ctx(), port=667)
     rc, out = run(host, "uninstall", "--dry-run")
     assert rc == 0 and "DRY RUN" in out and host.paths.ssh_dropin.exists()
 

@@ -219,7 +219,7 @@ def test_os_detection(tmp_path):
 def test_config_defaults_roundtrip_and_validation(tmp_path):
     path = tmp_path / "bant.toml"
     cfg = Config(path=path)
-    assert (cfg.ssh_port, cfg.rollback_minutes, cfg.maxretry, cfg.findtime, cfg.bantime) == (667, 10, 5, "10m", "1h")
+    assert (cfg.ssh_port, cfg.rollback_minutes, cfg.maxretry, cfg.findtime, cfg.bantime) == (0, 10, 5, "10m", "1h")  # 0 = random, chosen on first setup
     cfg.set("trust", "ips", ["203.0.113.5"])
     cfg.save()
     again = Config.load(path)
@@ -231,7 +231,7 @@ def test_config_bad_values_fall_back_with_problems_reported(tmp_path):
     path = tmp_path / "bant.toml"
     path.write_text('[ssh]\nport = 99999\n[fail2ban]\nmaxretry = "many"\nbantime = "forever-ish"\n[trust]\nips = ["1.2.3.4", "junk"]\n')
     cfg = Config.load(path)
-    assert cfg.ssh_port == 667 and cfg.maxretry == 5 and cfg.bantime == "1h" and cfg.trusted_ips == ["1.2.3.4"]
+    assert cfg.ssh_port == 0 and cfg.maxretry == 5 and cfg.bantime == "1h" and cfg.trusted_ips == ["1.2.3.4"]
     assert len(cfg.problems) == 4
 
 
@@ -239,7 +239,7 @@ def test_config_unparseable_file_uses_defaults(tmp_path):
     path = tmp_path / "bant.toml"
     path.write_text("this is = not [valid toml")
     cfg = Config.load(path)
-    assert cfg.ssh_port == 667 and cfg.problems
+    assert cfg.ssh_port == 0 and cfg.problems
 
 
 def test_config_from_newer_version_is_rejected(tmp_path):
@@ -345,7 +345,7 @@ def test_audit_flags_dangerous_ssh_settings(host, ctx):
     ids = {f.id: f for f in security_audit.run(ctx)}
     assert ids["SSH-020"].severity == "critical" and ids["SSH-030"].severity == "high"
     assert ids["SSH-040"].fixable and "bant ssh set max-auth-tries" in ids["SSH-040"].fix
-    assert "SSH-010" in ids
+    assert "SSH-010" in ids and ids["SSH-010"].fix == "sudo bant ssh port random"
 
 
 def test_audit_detects_password_still_possible_via_kbdinteractive(host, ctx):

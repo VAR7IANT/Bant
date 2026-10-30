@@ -10,7 +10,6 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from bant import __version__
-from bant.constants import DEFAULT_SSH_PORT
 from bant.context import Context
 from bant.core import (
     backups,
@@ -20,6 +19,7 @@ from bant.core import (
     logs,
     migration,
     netinfo,
+    ports,
     repair,
     security_audit,
     setup,
@@ -117,8 +117,8 @@ def build_parser() -> argparse.ArgumentParser:
         return sp
 
     sadd("status", "show SSH state", cmd_ssh_status)
-    sp = sadd("port", "show or change the SSH port (safe migration, default 667)", cmd_ssh_port)
-    sp.add_argument("port", nargs="?", help="new TCP port (1-65535)")
+    sp = sadd("port", "show or change the SSH port (safe migration; 'random' picks a free random port)", cmd_ssh_port)
+    sp.add_argument("port", nargs="?", help="TCP port (1-65535) or 'random'")
     sp.add_argument("--minutes", type=int, help="rollback window in minutes (default from config: 10)")
     sp = sadd("password", "turn SSH password login on or off", cmd_ssh_password)
     sp.add_argument("value", choices=["on", "off"])
@@ -210,7 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("setup", "first-run setup: baseline, Fail2ban, SSH migration (used by install.sh)", cmd_setup)
     p.add_argument("--no-ssh-migration", action="store_true")
     p.add_argument("--no-fail2ban", action="store_true")
-    p.add_argument("--ssh-port", help=f"target SSH port (default {DEFAULT_SSH_PORT})")
+    p.add_argument("--ssh-port", help="SSH port to use: a number, or 'random' (default: random free port, or keep an existing custom port)")
     p.add_argument("--minutes", type=int)
     p = add("uninstall", "remove Bant safely (SSH port and Fail2ban settings are kept)", cmd_uninstall)
     p.add_argument("--purge", action="store_true", help="also delete backups, logs and configuration")
@@ -321,19 +321,23 @@ def _print_port_plan(ui: UI, p: migration.PortPlan) -> None:
 def cmd_ssh_port(args, ctx, ui) -> int:
     if args.port is None:
         st = ssh.status(ctx)
-        emit(args, ui, {"ports": st.active_ports, "configured": st.config_ports, "target": ctx.config.ssh_port},
-             lambda: ui.kv([("SSH port(s)", ", ".join(map(str, st.active_ports)), "ok"), ("Bant default", ctx.config.ssh_port, None)]))
+        configured = ctx.config.ssh_port or None
+        emit(args, ui, {"ports": st.active_ports, "configured": st.config_ports, "bant_port": configured},
+             lambda: ui.kv([("SSH port(s)", ", ".join(map(str, st.active_ports)), "ok"),
+                            ("Bant-managed port", configured or "not chosen yet (random on first setup)", None)]))
         return EX_OK
-    port = parse_port(args.port)
+    ctx.require_root("Moving the SSH port")
+    port, source = ports.resolve_target(ctx, args.port)
+    if source == "random" and not getattr(args, "json", False):
+        ui.info(f"Random free port chosen: {port}")
     if args.minutes is not None:
         parse_int_range(args.minutes, 1, 1440, "--minutes")
-    ctx.require_root("Moving the SSH port")
     p = migration.plan(ctx, port)
     if not getattr(args, "json", False):
         _print_port_plan(ui, p)
     if p.blockers:
         raise OperationFailed("Cannot migrate: " + " ".join(p.blockers),
-                              hint="Choose another port, e.g. `sudo bant ssh port 2222`." if any("in use" in b for b in p.blockers) else None)
+                              hint="Choose another port, or let Bant pick one: `sudo bant ssh port random`." if any("in use" in b for b in p.blockers) else None)
     if p.already_done:
         out = migration.begin(ctx, port)
         emit(args, ui, out, lambda: ui.success(f"SSH already uses TCP {port}; firewall and Fail2ban verified."))
@@ -611,9 +615,35 @@ def cmd_repair(args, ctx, ui) -> int:
     return EX_ERROR if any("FAILED" in a["result"] for a in actions) else EX_OK
 
 
+def _ask_ssh_port(ctx: Context, ui: UI) -> int | None:
+    """Interactive installs: show the random port Bant would use and let the user accept, change or reroll it."""
+    candidate, source = ports.resolve_target(ctx, None)
+    if source not in ("random", "remembered"):
+        return None  # already decided (configured, or an existing custom port is kept)
+    ui.section("SSH port")
+    ui.text(f" Bant will move SSH to a random free port: {candidate}")
+    ui.info(" Press Enter to accept, type your own port number, or 'r' for another random port.")
+    ui.info(" Remember to allow that port in your VPS provider's firewall/security group, if it has one.")
+    while True:
+        answer = ui.ask("SSH port", str(candidate)).strip().lower()
+        if answer in ("r", "random"):
+            candidate = ports.pick_random(ctx, exclude=[candidate])
+            ui.text(f" New random port: {candidate}")
+            continue
+        try:
+            return parse_port(answer)
+        except ValidationError as exc:
+            ui.error(exc.message)
+
+
 def cmd_setup(args, ctx, ui) -> int:
-    port = parse_port(args.ssh_port) if args.ssh_port else None
-    report = setup.run(ctx, migrate=not args.no_ssh_migration, with_fail2ban=not args.no_fail2ban, port=port, minutes=args.minutes)
+    ctx.require_root("Setting up Bant")
+    port: int | str | None = args.ssh_port
+    migrate = not args.no_ssh_migration
+    if port is None and migrate and sys.stdin.isatty() and not getattr(args, "yes", False) and not getattr(args, "json", False) \
+            and not TxManager(ctx).pending():
+        port = _ask_ssh_port(ctx, ui)
+    report = setup.run(ctx, migrate=migrate, with_fail2ban=not args.no_fail2ban, port=port, minutes=args.minutes)
     emit(args, ui, report, lambda: render_setup(ui, report))
     return EX_OK if report["outcome"] in ("complete", "pending_confirmation") else EX_ERROR
 

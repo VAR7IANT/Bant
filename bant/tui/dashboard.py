@@ -20,7 +20,7 @@ def draw(ctx: Context, ui: UI) -> dict:
     f2l, f2s = F2B_LABELS.get(f2b["state"], (f2b["state"], None))
     ports = ", ".join(map(str, ssh["ports"])) or "unknown"
     rows = [
-        ("SSH Port", ports, "ok" if len(ssh["ports"]) == 1 and ssh["ports"][0] == ssh["target_port"] else "warn"),
+        ("SSH Port", ports, "ok" if len(ssh["ports"]) == 1 and ssh["ports"][0] != 22 else "warn"),
         ("Password Login", pw, pws), ("Public Key Auth", pk, pks),
         ("Fail2ban", f2l, f2s),
         ("Firewall", f"{fw['backend']}" if fw["active"] else "none detected", "ok" if fw["active"] else "warn"),

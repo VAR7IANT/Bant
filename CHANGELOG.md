@@ -13,7 +13,8 @@ real-VPS acceptance testing is still required before production use (see `docs/T
 - `bant` command with an interactive terminal UI (Rich, with a plain-text fallback) and structured
   subcommands: `status`, `doctor`, `audit`, `logs`, `ssh`, `fail2ban`, `firewall`, `updates`,
   `backup`, `restore`, `repair`, `setup`, `uninstall`. JSON output and `--dry-run` where applicable.
-- Safe SSH migration to TCP 667: dual listener, firewall allowance, Fail2ban update, persistent
+- Safe SSH migration to a random free port by default (or any port you choose; an existing custom port is
+  kept): dual listener, firewall allowance, Fail2ban update, persistent
   systemd-timer rollback, and server-side verification of a *new* authenticated session before the
   old listener is removed (`bant ssh confirm`). Supports sshd_config includes/drop-ins, Match blocks
   and `ssh.socket` activation.

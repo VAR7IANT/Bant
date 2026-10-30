@@ -44,7 +44,7 @@ def _collect(ctx: Context, deep: bool) -> dict[str, Any]:
         "privileged": ctx.is_root,
         "ssh": {
             "installed": st.installed, "mode": st.mode, "ports": st.active_ports, "configured_ports": st.config_ports,
-            "target_port": cfg.ssh_port, "service_active": st.service_active, "config_valid": st.config_valid,
+            "target_port": cfg.ssh_port or None, "service_active": st.service_active, "config_valid": st.config_valid,
             "password_auth": st.password_auth, "kbd_interactive": st.kbd_interactive, "pubkey_auth": st.pubkey_auth,
             "root_login": st.root_login, "root_label": st.root_label, "max_auth_tries": st.max_auth_tries,
             "login_grace_time": st.login_grace_time, "source": st.source, "pending": pend,
@@ -98,8 +98,7 @@ def doctor(ctx: Context) -> list[DoctorCheck]:
         add("ssh", "sshd configuration valid (sshd -t)", st.config_valid, st.config_error)
         add("ssh", "effective config source", st.source == "sshd -T", st.source + (f" - {st.note}" if st.note else ""), warn=True)
         add("ssh", "listening", bool(st.listening_ports), f"ports {st.listening_ports or 'none detected'} (mode: {st.mode})")
-        add("ssh", f"on Bant default port {ctx.config.ssh_port}", ctx.config.ssh_port in st.active_ports,
-            f"active ports {st.active_ports}", warn=True)
+        add("ssh", "not on the default port 22", 22 not in st.active_ports, f"active ports {st.active_ports}", warn=True)
         for port in st.active_ports[:1]:
             add("ssh", "answers with an SSH banner", ctx.banner_probe("127.0.0.1", port) is not None, f"127.0.0.1:{port}")
         add("ssh", "no pending transaction", st.pending_tx is None, st.pending_tx or "", warn=True)

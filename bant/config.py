@@ -6,7 +6,7 @@ import copy
 from pathlib import Path
 from typing import Any
 
-from bant.constants import DEFAULT_ROLLBACK_MINUTES, DEFAULT_SSH_PORT
+from bant.constants import AUTO_SSH_PORT, DEFAULT_ROLLBACK_MINUTES
 from bant.errors import ValidationError
 from bant.utils import fsutil, tomlio
 from bant.utils.validation import parse_duration, parse_int_range, parse_ip, parse_port
@@ -15,12 +15,15 @@ CONFIG_VERSION = 1
 
 DEFAULTS: dict[str, dict[str, Any]] = {
     "general": {"config_version": CONFIG_VERSION},
-    "ssh": {"port": DEFAULT_SSH_PORT, "rollback_minutes": DEFAULT_ROLLBACK_MINUTES},
+    "ssh": {"port": AUTO_SSH_PORT, "rollback_minutes": DEFAULT_ROLLBACK_MINUTES},
     "fail2ban": {"maxretry": 5, "findtime": "10m", "bantime": "1h"},
     "trust": {"ips": []},
 }
 
-HEADER = "# Bant configuration. Edit with `bant` or by hand; unknown keys are preserved on save.\n"
+HEADER = (
+    "# Bant configuration. Edit with `bant` or by hand; unknown keys are preserved on save.\n"
+    "# ssh.port = 0 means \"random\": Bant picks a free random port when it first moves SSH and stores it here.\n"
+)
 
 
 def _migrate(data: dict) -> dict:
@@ -67,7 +70,7 @@ class Config:
     def _validate(self) -> None:
         d = self.data
         for section, key, check in (
-            ("ssh", "port", parse_port),
+            ("ssh", "port", lambda v: AUTO_SSH_PORT if int(v) == AUTO_SSH_PORT else parse_port(v)),
             ("ssh", "rollback_minutes", lambda v: parse_int_range(v, 1, 1440, "rollback_minutes")),
             ("fail2ban", "maxretry", lambda v: parse_int_range(v, 1, 100, "maxretry")),
             ("fail2ban", "findtime", parse_duration),
@@ -75,7 +78,7 @@ class Config:
         ):
             try:
                 check(d[section][key])
-            except (ValidationError, KeyError, TypeError):
+            except (ValidationError, KeyError, TypeError, ValueError):
                 self.problems.append(f"invalid [{section}] {key}={d[section].get(key)!r}; using default")
                 d[section][key] = DEFAULTS[section][key]
         clean = []

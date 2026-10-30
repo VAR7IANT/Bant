@@ -12,6 +12,7 @@ import copy
 import fcntl
 import json
 import os
+import random
 import time
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
@@ -89,6 +90,7 @@ class Context:
         mirror_syslog: bool = True,
         sleep: Callable[[float], None] = time.sleep,
         banner_probe: Callable[[str, int], str | None] | None = None,
+        rng: random.Random | None = None,
     ):
         self.paths = paths or Paths()
         self.runner = runner or Runner()
@@ -101,6 +103,7 @@ class Context:
         self.state = State(self.paths.state_file)
         self.audit_log = AuditLog(self.paths.audit_log, clock=clock, mirror_syslog=mirror_syslog)
         self.sleep = sleep
+        self.rng = rng or random.SystemRandom()
         self.banner_probe = banner_probe or _tcp_banner
         self.planned: list[str] = []
         self._memo: dict[str, Any] | None = None

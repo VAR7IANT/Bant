@@ -1,7 +1,7 @@
 """First-run setup (`bant setup`, called by install.sh). Idempotent and resumable.
 
 Order of operations: baseline files -> backup -> Fail2ban (for the *current* SSH ports) ->
-SSH port migration to 667 (dual listener, rollback armed) -> summary. The migration is never
+SSH port migration to a random free port or the port you choose (dual listener, rollback armed) -> summary. The migration is never
 finalised here: that needs a verified new connection (`bant ssh confirm`).
 """
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from bant.context import Context
-from bant.core import backups, fail2ban, firewall, migration, ssh
+from bant.core import backups, fail2ban, firewall, migration, ports, ssh
 from bant.core.rollback import TxManager
 from bant.errors import BantError
 from bant.platform import detect_os, has_systemd
@@ -23,12 +23,11 @@ def _step(ctx: Context, name: str, status: str, detail: str = "") -> dict[str, s
     return rec
 
 
-def run(ctx: Context, *, migrate: bool = True, with_fail2ban: bool = True, port: int | None = None,
+def run(ctx: Context, *, migrate: bool = True, with_fail2ban: bool = True, port: int | str | None = None,
         minutes: int | None = None) -> dict[str, Any]:
     ctx.require_root("Setting up Bant")
     steps: list[dict[str, str]] = []
     next_steps: list[str] = []
-    target = port or ctx.config.ssh_port
     osi = detect_os(ctx)
     with ctx.lock():
         # 1 baseline
@@ -54,6 +53,9 @@ def run(ctx: Context, *, migrate: bool = True, with_fail2ban: bool = True, port:
             migrate = False
 
         pend = TxManager(ctx).pending()
+        target, port_source = 0, ""
+        if migrate and not pend:
+            target, port_source = ports.resolve_target(ctx, port)
 
         # 3 Fail2ban for the ports in use right now
         if with_fail2ban:
@@ -85,14 +87,15 @@ def run(ctx: Context, *, migrate: bool = True, with_fail2ban: bool = True, port:
             p = migration.plan(ctx, target)
             if p.already_done:
                 migration_result = migration.begin(ctx, target)
-                steps.append(_step(ctx, "ssh-migration", "done", f"SSH already on TCP {target}"))
+                steps.append(_step(ctx, "ssh-migration", "done", f"SSH already on TCP {target} ({ports.DESCRIPTIONS[port_source]})"))
             elif p.blockers:
                 steps.append(_step(ctx, "ssh-migration", "skipped", " ".join(p.blockers)))
-                next_steps.append(f"Resolve the blocker, then run `sudo bant ssh port {target}` (or choose another port).")
+                next_steps.append(f"Resolve the blocker, then run `sudo bant ssh port {target}` (or `sudo bant ssh port random`).")
             else:
                 try:
                     migration_result = migration.begin(ctx, target, minutes=minutes)
-                    steps.append(_step(ctx, "ssh-migration", "pending", f"dual listener {sorted(set(p.old_ports + [target]))} active"))
+                    steps.append(_step(ctx, "ssh-migration", "pending",
+                                       f"new SSH port {target} ({ports.DESCRIPTIONS[port_source]}); listening on {sorted(set(p.old_ports + [target]))}"))
                 except BantError as exc:
                     steps.append(_step(ctx, "ssh-migration", "failed", exc.message))
         else:
@@ -109,8 +112,9 @@ def run(ctx: Context, *, migrate: bool = True, with_fail2ban: bool = True, port:
             outcome = "pending_confirmation"
             d = migration.describe_pending(ctx)
             if d and d.get("target"):
-                next_steps.insert(0, f"Open a NEW terminal and connect: {migration.login_hint(ctx, d['target'])}")
-                next_steps.insert(1, "Then run `sudo bant ssh confirm` within the deadline.")
+                next_steps.insert(0, f"FIRST allow inbound TCP {d['target']} in your VPS provider's firewall / security group, if it has one.")
+                next_steps.insert(1, f"Open a NEW terminal and connect: {migration.login_hint(ctx, d['target'])}")
+                next_steps.insert(2, "Then run `sudo bant ssh confirm` within the deadline (`sudo bant ssh extend` adds time).")
         elif failed or skipped_mig:
             outcome = "incomplete"
         else:
@@ -119,4 +123,4 @@ def run(ctx: Context, *, migrate: bool = True, with_fail2ban: bool = True, port:
         ctx.audit("setup", outcome=outcome, steps=steps)
 
     return {"outcome": outcome, "steps": steps, "next_steps": next_steps, "migration": migration_result,
-            "pending": migration.describe_pending(ctx)}
+            "pending": migration.describe_pending(ctx), "ssh_port": target or None, "port_source": port_source or None}

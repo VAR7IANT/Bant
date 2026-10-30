@@ -57,7 +57,7 @@ def render_status(ui: UI, d: dict[str, Any]) -> None:
     rows = [
         ("OS", d["os"]["name"] + ("" if d["os"]["supported"] else "  (unsupported release)"), None if d["os"]["supported"] else "warn"),
         ("Kernel", d["os"]["kernel"], None),
-        ("SSH port", ports, "ok" if d["ssh"]["target_port"] in ssh["ports"] and len(ssh["ports"]) == 1 else "warn"),
+        ("SSH port", ports, "ok" if len(ssh["ports"]) == 1 and ssh["ports"][0] != 22 else "warn"),
         ("Password login", pw, pws), ("Public key auth", pk, pks),
         ("Root login", ssh["root_label"] or ssh["root_login"], "warn" if ssh["root_login"] == "yes" else None),
         ("Fail2ban", f2_label, f2_style),
@@ -226,6 +226,10 @@ def render_setup(ui: UI, report: dict[str, Any]) -> None:
         ui.warn("Setup is NOT finished: the SSH migration is waiting for your confirmation.")
     else:
         ui.warn("Setup is incomplete - see the steps above.")
+    if report.get("ssh_port"):
+        from bant.core.ports import DESCRIPTIONS
+        ui.text("")
+        ui.text(f" SSH port: {report['ssh_port']}  ({DESCRIPTIONS.get(report.get('port_source') or '', '')})", "title")
     if report.get("pending"):
         render_pending(ui, report["pending"])
     if report["next_steps"]:
