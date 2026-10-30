@@ -1,0 +1,16 @@
+[Unit]
+Description=Bant: re-apply Bant-owned firewall allowances and IP blocks
+Documentation=https://github.com/VAR7IANT/Bant
+# No Before=network.target: Docker and others order after it and would create a cycle.
+After=network-pre.target nftables.service ufw.service firewalld.service
+ConditionPathExists=/var/lib/bant/state.json
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/bant _fw-apply
+# Never let a failure here block boot or SSH.
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target
