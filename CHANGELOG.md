@@ -4,7 +4,7 @@ All notable changes to Bant are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-30 (pre-release)
 
 First functional release (foundation). Verified by automated unit and integration tests only;
 real-VPS acceptance testing is still required before production use (see `docs/TESTING.md`).
