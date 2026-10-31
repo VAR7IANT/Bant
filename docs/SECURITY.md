@@ -22,13 +22,17 @@ invariants it enforces, how they are tested, and what it deliberately does not d
    no Docker/proxy chain edits. Manual blocks live in Bant's own nftables table.
 6. **Administrator files win.** Bant writes only `00-bant.conf`, `zz-bant-sshd.local`,
    `bant-sshd.conf`, an optional `ssh.socket` drop-in and `52bant-unattended-upgrades`. Fail2ban keys the administrator
-   already set for `[sshd]` or `[DEFAULT]` are not overridden and are reported. The only edit of an
+   already set for `[sshd]` or `[DEFAULT]` are not overridden; differing values are reported
+   (`bant fail2ban conflicts`), equal values are not. Taking such keys over (`--resolve adopt`) needs your
+   confirmation, comments the lines out instead of deleting them, and is backed up and reversible. The only edit of an
    administrator file is commenting out an old `Port` line during a confirmed migration (backed up,
    recorded, reversible).
 7. **No lockout by omission.** Refuses: password-off without a key login or with
    `AuthenticationMethods` requiring a password; root-off when root is the only admin;
    pubkey-off with passwords off; bans matching your own SSH session; uninstall that would change the
-   listener; restore that would drop your session's port.
+   listener, run while an SSH change is pending, or proceed without a backup; restore that would drop your
+   session's port. Uninstall keeps every firewall allowance that is still needed (your SSH port above all) and
+   makes it survive reboots on nftables/iptables; it restores its own changes if a post-check fails.
 8. **No silent success.** Every mutation re-reads state (listening port, banner, jail status, rule
    presence). Failure -> rollback -> non-zero exit and a hint.
 9. **Concurrency.** One exclusive `flock` on `/var/lib/bant/lock` for mutations; the rollback script

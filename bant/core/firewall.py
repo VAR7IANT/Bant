@@ -349,6 +349,21 @@ def remove_rule(ctx: Context, rule: dict[str, Any]) -> tuple[bool, str]:
     return ok_all, "; ".join(m for m in msgs if m)
 
 
+def rule_present(ctx: Context, rule: dict[str, Any]) -> bool:
+    """Is this registry rule live right now?"""
+    backend = rule.get("backend")
+    if backend == "nftables":
+        return _nft_find_handle(ctx, rule.get("chain", {}), rule["tag"]) is not None
+    if backend == "ufw":
+        return _ufw_allowed(ctx, rule["port"], rule["proto"])
+    if backend == "firewalld":
+        return _firewalld_allowed(ctx, rule["port"], rule["proto"])
+    if backend == "iptables" and rule.get("undo"):
+        undo = rule["undo"][0]
+        return ctx.run([undo[0], "-C"] + undo[2:]).ok
+    return False
+
+
 def remove_port(ctx: Context, port: int, proto: str = "tcp") -> list[str]:
     """Remove Bant-owned allowances for this port. Refuses to touch anything not in the registry."""
     ctx.require_root("Changing firewall rules")

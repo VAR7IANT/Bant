@@ -1,7 +1,10 @@
 # Command reference
 
 `bant` with no arguments opens the interactive menu on a terminal (read-only unless run as root) and
-prints `bant status` otherwise. Global options work before or after the command:
+prints `bant status` otherwise. The menu has six entries - **1 Security overview, 2 One-click protection,
+3 SSH management, 4 Firewall & bans, 5 Maintenance & settings, 6 Safe uninstall** - and every action in it
+calls the same code as the commands below. Global options work before or after the command, and every
+one of them may be left out (an omitted option simply has its default):
 
 | Option | Meaning |
 |---|---|
@@ -66,6 +69,7 @@ and fails with exit code 3 *before* doing anything otherwise.
 | `sudo bant fail2ban unban IP` | remove from Fail2ban and from Bant blocks (never external rules) |
 | `sudo bant fail2ban set maxretry\|findtime\|bantime VALUE` | tune the managed jail (validated, reverted on failure) |
 | `bant fail2ban trusted` / `sudo ... trust IP` / `untrust IP` | never-ban list (feeds `ignoreip`) |
+| `bant fail2ban conflicts [--resolve keep\|adopt] [--key K]` | administrator files that also set `[sshd]` options (e.g. `jail.d/99-sshd.local`): your value, Bant's value, the value in use and which file wins. Equal values are *duplicates* and not warned about. `keep` = you keep managing them (no file change, warning silenced until the file changes); `adopt` = backup, comment out your lines (never deleted), Bant's jail takes over with your numbers, test, reload, verify; any failure restores everything. `--dry-run` previews |
 
 ## Firewall and IP management
 
@@ -102,10 +106,13 @@ it; installations older than that need one manual `git pull && sudo bash install
 | `sudo bant backup [--note T] [--list]` | checksummed snapshot of SSH, Fail2ban, Bant, ufw, nftables and apt settings (no host keys/secrets) |
 | `sudo bant restore [ID\|latest] [--list]` | validated restore; snapshot first; undoes itself on failure |
 | `sudo bant repair` | fix permissions, clean/re-arm timers, roll back overdue changes, re-apply policy |
-| `sudo bant setup [--no-ssh-migration] [--no-fail2ban] [--ssh-port N\|random]` | what the installer runs; resumable. Default port: random (asks interactively; keeps an existing custom port) |
-| `sudo bant uninstall [--purge] [--remove-fail2ban-config] [--dry-run]` | see INSTALL.md |
+| `sudo bant setup [--no-ssh-migration] [--no-fail2ban] [--ssh-port N\|random] [--dry-run]` | one-click protection; what the installer runs. Idempotent and resumable: finished steps report "already enabled", a failed step is reported with its reason and the other steps still run; `--dry-run` writes nothing. Default port: random free port (asks interactively; keeps an existing custom port; if none qualifies, it asks you for one instead of failing) |
+| `sudo bant uninstall [--purge] [--remove-fail2ban-config] [--dry-run]` | safe uninstall: safety checks, preview, backup, then removal. Refused while an SSH change is pending. See [INSTALL.md](INSTALL.md#uninstall) |
 
-Internal commands used by systemd (`_tx-finish`, `_fw-apply`) are not part of the public interface.
+Internal commands (`_tx-finish`, `_fw-apply` for systemd, `_setup-state` for the installer) are not part of the public interface.
+
+Unexpected internal errors are never shown as a Python traceback: Bant prints a short message, and as root
+writes the details to `/var/log/bant/debug.log` (`BANT_DEBUG=1` shows the traceback instead).
 
 ## Examples
 

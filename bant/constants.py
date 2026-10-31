@@ -80,6 +80,12 @@ class Paths:
     @property
     def f2b_filter(self) -> Path: return self.p("/etc/fail2ban/filter.d/bant-sshd.conf")
 
+    # --- kept after uninstall (de-branded so they keep working without Bant) ----
+    @property
+    def retained_fw_script(self) -> Path: return self.p("/usr/local/sbin/retained-port-allow")
+    @property
+    def retained_fw_unit(self) -> Path: return self.p("/etc/systemd/system/retained-port-allow.service")
+
     # --- Misc --------------------------------------------------------------
     @property
     def apt_bant_conf(self) -> Path: return self.p("/etc/apt/apt.conf.d/52bant-unattended-upgrades")

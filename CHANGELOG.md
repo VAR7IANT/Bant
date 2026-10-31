@@ -4,6 +4,52 @@ All notable changes to Bant are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] - Unreleased (pre-release)
+
+### Fixed
+- **`sudo bant setup` crashed with `ValueError: empty range for randrange()`** on a VPS whose kernel
+  ephemeral port range covers every preferred port (seen on an AS3 VPS). Random port selection now validates
+  the range (malformed or illegal values fall back to the Linux default), uses `ip_local_reserved_ports` or a
+  port that no socket uses at all as a verified fallback, and otherwise stops with a clear message and a way
+  to choose a port. Backup, Fail2ban and firewall steps still run when no port can be chosen.
+- **`sudo bant uninstall` crashed with `AttributeError: 'Namespace' object has no attribute 'dry_run'`**
+  (AS3 VPS). Global options are now filled in once after parsing for every command; a test parses every
+  command without optional flags.
+- **Uninstall removed the firewall allowance for the SSH port.** With ufw (or nftables/iptables) denying
+  inbound traffic, new SSH logins would have been blocked after uninstalling. Allowances that are still
+  needed are now kept, and survive reboots on nftables/iptables via `retained-port-allow.service`.
+- `bant doctor` warned about every `[sshd]` key in an administrator file (5 warnings on VMISS9929 for
+  `jail.d/99-sshd.local`) even when the values equal Bant's. Only real differences are reported now.
+- Fail2ban files are evaluated in Fail2ban's real order (jail.d/*.conf, jail.local, jail.d/*.local) and
+  `[sshd]` beats `[DEFAULT]`.
+- `setup --dry-run` no longer creates Bant's directories or state; `ssh port --dry-run --json` prints valid JSON.
+- Unexpected internal errors no longer show Python exceptions to users; details go to `/var/log/bant/debug.log`.
+
+### Added
+- **New main menu** with six entries: Security overview, One-click protection, SSH management, Firewall &
+  bans, Maintenance & settings, Safe uninstall. Compact status block, update and "setup not finished"
+  notices, details and advanced options in submenus, every submenu has Back, invalid input never crashes,
+  narrow terminals (phones) get a box-less layout with width-aware wrapping. English and 繁體中文.
+- **Safe uninstall** (CLI and menu: standard / full removal / preview): safety checks (your session, sshd
+  valid and listening, no pending SSH change), backup first (or stop), journalled changes with automatic
+  restore if a post-check fails, verification of SSH, Fail2ban and kept firewall allowances, program files
+  removed last so an interrupted uninstall can be repeated; works for partial and failed installations.
+- **`bant fail2ban conflicts`** with `--resolve keep|adopt`: compares administrator `[sshd]` settings with
+  Bant's (normalised durations/ports), shows source and precedence, and resolves with preview, backup,
+  validation, reload, verification and rollback. Administrator lines are commented out, never deleted.
+- Setup report: completed / failed (with reason) / remaining steps and whether an SSH change was rolled back;
+  "already enabled, no reconfiguration needed" for steps that are in place; Fail2ban is not reloaded when
+  nothing changed.
+
+### Changed
+- `install.sh` decides by the existing state: upgrades only when setup is complete or a change is pending,
+  offers the setup when the program was installed with `--no-setup` or setup is unfinished, and explains a
+  failed setup instead of just exiting.
+- Doctor check "admin override" renamed to "administrator setting differs".
+
+### Not yet verified
+- None of this has been run on a real VPS yet; see the 0.1.2 items in `docs/TESTING.md`.
+
 ## [0.1.1] - 2026-10-31 (pre-release)
 
 ### Added

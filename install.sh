@@ -3,15 +3,18 @@
 #
 #   sudo bash install.sh [options]
 #
-# Installs Bant, registers the global `bant` command and runs `bant setup`, which
+# Installs Bant, registers the global `bant` command and runs the security setup (`bant setup`), which
 #   * installs/configures Fail2ban for SSH,
 #   * starts a SAFE migration of SSH to a RANDOM free port (or the port you choose); the old port stays
 #     open and an automatic rollback is armed,
 #   * leaves the final switch to you: log in on the new port, then run `sudo bant ssh confirm`.
 #
+# Re-running it upgrades the program and keeps everything else: SSH port, password policy, Fail2ban,
+# firewall rules, backups and state. A finished setup is not repeated; an unfinished one is offered again.
+#
 # Options:
 #   -y, --yes               non-interactive (assume yes for package installation)
-#   --no-setup              install files only; do not run `bant setup`
+#   --no-setup              install the program only; security setup is NOT run (later: `sudo bant setup`)
 #   --no-ssh-migration      skip the SSH port migration
 #   --no-fail2ban           skip Fail2ban installation/configuration
 #   --no-update-check       do not enable the daily check for new Bant releases (check only, never installs)
@@ -154,14 +157,49 @@ if [ -z "$DESTDIR" ] && [ "$DRY_RUN" -eq 0 ]; then
 fi
 
 # ---- setup ------------------------------------------------------------------
-if [ "$RUN_SETUP" -eq 1 ] && [ -z "$DESTDIR" ]; then
-  log "Running initial setup (baseline, Fail2ban, SSH migration)..."
+# State of an earlier installation: complete | pending_confirmation | incomplete | never
+SETUP_STATE="never"
+if [ -z "$DESTDIR" ] && [ "$DRY_RUN" -eq 0 ]; then
+  SETUP_STATE="$("$BIN" _setup-state 2>/dev/null || echo never)"
+fi
+EXPLICIT_SETUP=0
+if [ ${#SETUP_ARGS[@]} -gt 0 ]; then EXPLICIT_SETUP=1; fi
+
+run_setup() {
+  log "Running security setup (backup, Fail2ban, firewall check, SSH migration)..."
   if [ "$ASSUME_YES" -eq 1 ]; then SETUP_ARGS+=(--yes); fi
   if [ "$DRY_RUN" -eq 1 ]; then
     printf '  would run: %s setup %s\n' "$BIN" "${SETUP_ARGS[*]:-}"
-  else
-    "$BIN" setup "${SETUP_ARGS[@]}"
+    return 0
   fi
+  if "$BIN" setup "${SETUP_ARGS[@]}"; then
+    return 0
+  fi
+  warn "Security setup did not finish. The report above lists the failed step, its reason, and what was already done."
+  warn "Bant itself is installed. Nothing is left half-changed: an unfinished SSH change is rolled back automatically."
+  warn "Fix the reported problem and run 'sudo bant setup' again - finished steps are skipped and the rest resumes."
+  return 1
+}
+
+if [ -n "$DESTDIR" ]; then
+  log "DESTDIR install: setup skipped."
+elif [ "$RUN_SETUP" -eq 0 ]; then
+  log "Bant is installed, but security setup has NOT been run (--no-setup)."
+  log "Run it when you are ready: sudo bant setup   (or: sudo bant -> 2. One-click protection)"
+elif [ "$SETUP_STATE" = "pending_confirmation" ]; then
+  log "An SSH change from an earlier run is waiting for confirmation; setup is not repeated now."
+  log "Log in on the new port in a NEW terminal, then run: sudo bant ssh confirm   (status: sudo bant ssh status)"
+elif [ "$SETUP_STATE" = "complete" ] && [ "$EXPLICIT_SETUP" -eq 0 ]; then
+  log "Security setup was already completed on this server: SSH port, password policy, Fail2ban and firewall are kept as they are."
+  log "Re-check at any time with: sudo bant doctor   (or re-run: sudo bant setup)"
+elif [ -n "$EXISTING" ] && [ "$SETUP_STATE" != "complete" ] && [ "$ASSUME_YES" -eq 0 ] && [ -t 0 ] && [ "$EXPLICIT_SETUP" -eq 0 ]; then
+  log "Bant is installed, but security setup is not complete yet."
+  printf '[bant] Run the security setup now? [Y/n] '
+  read -r answer || answer="n"
+  case "$answer" in
+    ""|y|Y|yes|YES) run_setup || exit 1 ;;
+    *) log "Skipped. Run it later with: sudo bant setup" ;;
+  esac
 else
-  log "Skipping setup. Run it later with: sudo bant setup"
+  run_setup || exit 1
 fi

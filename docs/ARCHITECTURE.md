@@ -21,9 +21,11 @@ bant/
     fail2ban.py     install, effective-config reader (-d), policy writer, verification
     updates.py      unattended-upgrades drop-in
     security_audit  findings; status.py  status + doctor; repair.py; backups.py
-    setup.py        first-run orchestration; uninstall.py
+    setup.py        one-click protection / first run: independent, resumable steps and a report
     logs.py         journal/auth.log/audit trail access
     updater.py      self-update: check GitHub releases, verify, safe-extract, install, roll back
+    f2b_conflicts.py  administrator [sshd] settings vs Bant's jail: analyse, keep, adopt (backup/verify/restore)
+    uninstall.py    preflight checks, journalled changes, post-verification, program removed last
     ports.py        SSH port choice: requested / existing / remembered / random (outside the ephemeral range)
   i18n.py           language selection + output-boundary translator (English source text, zh catalog)
   locales/zh_tw.py  Traditional Chinese message catalog (~1100 entries)

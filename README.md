@@ -46,6 +46,27 @@ the new connection simply times out and the rollback restores the original state
 
 ## Use
 
+`sudo bant` opens a short menu that also fits a phone SSH client:
+
+```text
+ BANT v0.1.2 - Linux VPS Security Manager
+ Security status   • Secure
+ SSH port          48213
+ Password login    off
+ Fail2ban          running (verified)
+ Firewall          nftables
+ ────────────────────────────────
+  1. Security overview        summary first, full diagnostics on request
+  2. One-click protection     the whole safe setup; repeatable ("already enabled")
+  3. SSH management           port, password login, keys, root login, confirm / roll back
+  4. Firewall & bans          Fail2ban, banned IPs, trusted list, open ports, advanced
+  5. Maintenance & settings   Bant update, OS updates, backups, logs, repair, language
+  6. Safe uninstall           standard / full removal / preview
+  0. Exit
+```
+
+The same actions are available as commands (scripts written for 0.1.x keep working):
+
 ```text
 sudo bant                      interactive menu (read-only without root)
 bant status | doctor | audit   what is installed, running, and actually verified
@@ -53,7 +74,8 @@ sudo bant ssh port random|N    move SSH to a random free port, or to port N (saf
 sudo bant ssh password off     only after a verified key login; with automatic rollback
 sudo bant fail2ban ban <IP>    ban / unban, trusted IPs, jail tuning
 sudo bant firewall allow 8443  Bant-owned, removable allowances
-sudo bant backup | restore | repair | uninstall
+sudo bant backup | restore | repair | uninstall [--dry-run|--purge]
+sudo bant fail2ban conflicts   your [sshd] settings vs Bant's: duplicates, real conflicts, keep or adopt
 sudo bant lang en|zh           English / 繁體中文 (asked the first time you open the menu)
 sudo bant self-update          update Bant itself from a newer GitHub release (check / apply / rollback)
 ```
@@ -80,7 +102,8 @@ Full reference: [`docs/CLI.md`](docs/CLI.md). Every command supports `--help`; m
 | Use its own Fail2ban files; report if your files override its policy | Overwrite your jails, filters or ban policy |
 | Track ownership of every firewall rule it adds | Flush rules, change default policies, touch Docker/proxy chains |
 | Keep manual IP blocks in its own `inet bant` nftables table | Change sysctl, forwarding, routing, NAT, IPv6, conntrack |
-| Keep SSH on the new port when you uninstall it | Revert to port 22, remove Fail2ban, or strand you |
+| Keep SSH on the new port when you uninstall it | Revert to port 22, remove or stop Fail2ban, or strand you |
+| Keep the firewall allowance for your SSH port after uninstall (also across reboots) | Uninstall while an SSH change is pending, or without a backup |
 
 ## Documentation
 

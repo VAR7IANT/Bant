@@ -66,6 +66,14 @@ def tcp_table(ctx: Context) -> list[TcpEntry]:
     return entries
 
 
+def local_ports_in_use(ctx: Context) -> set[int]:
+    """Local port of every TCP/UDP socket in any state (listening, connected, bound), IPv4 and IPv6."""
+    out: set[int] = set()
+    for name in ("tcp", "tcp6", "udp", "udp6"):
+        out.update(e.local_port for e in parse_proc_net_tcp(read_text(ctx.paths.proc / "net" / name)))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Listening sockets
 # ---------------------------------------------------------------------------

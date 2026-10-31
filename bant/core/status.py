@@ -64,8 +64,18 @@ def _collect(ctx: Context, deep: bool) -> dict[str, Any]:
                      "critical_and_high": [f.to_dict() for f in crit]},
         "bant_update": {k: updater.cached(ctx).get(k) for k in ("latest", "available", "checked_at", "prerelease")},
         "health": health,
+        "setup": _setup_state(ctx),
         "notes": list(ctx.config.problems) + ([ssh_note] if (ssh_note := st.note) and st.source != "sshd -T" else []),
     }
+
+
+def _setup_state(ctx: Context) -> str:
+    from bant.core import setup
+
+    try:
+        return setup.initialized(ctx)
+    except Exception:  # noqa: BLE001 - status must always render
+        return "unknown"
 
 
 @dataclass
@@ -120,7 +130,7 @@ def doctor(ctx: Context) -> list[DoctorCheck]:
         for c in ov.checks:
             add("fail2ban", c.name, c.ok, c.detail, warn=c.ok is None)
         for c in ov.conflicts:
-            add("fail2ban", "admin override", False, c, warn=True)
+            add("fail2ban", "administrator setting differs", False, c + " - see `bant fail2ban conflicts`", warn=True)
 
     fw = firewall.detect(ctx)
     add("firewall", "backend", True, f"{fw.backend} ({fw.mode}): {fw.detail}")

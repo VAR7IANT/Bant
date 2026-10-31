@@ -121,13 +121,19 @@ def test_tui_in_a_real_pty_starts_navigates_and_exits():
 
     try:
         pump(10, b"Select an option")
-        assert b"SYSTEM OVERVIEW" in buf and b"SSH Port" in buf
-        os.write(fd, b"11\n")      # system information
+        assert b"Security status" in buf and b"SSH port" in buf and b"Safe uninstall" in buf
+        buf = b""
+        os.write(fd, b"1\n")       # security overview (submenu)
+        pump(15, b"Select an option")
+        assert b"SECURITY OVERVIEW" in buf
+        os.write(fd, b"6\n")       # system information
         pump(10, b"Run deep diagnostics")
         os.write(fd, b"n\n")
         pump(5, b"Press Enter")
         os.write(fd, b"\n")
         pump(5, b"Select an option")
+        os.write(fd, b"0\n")       # back to the main menu
+        pump(10, b"Select an option")
         os.write(fd, b"0\n")
         pump(5, b"Goodbye")
         assert b"Goodbye" in buf

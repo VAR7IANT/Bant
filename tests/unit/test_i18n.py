@@ -136,7 +136,7 @@ def test_first_run_prompt_offers_both_languages_and_persists_system_wide(tmp_pat
     assert run_tui(ctx, ui) == 0
     text = out.getvalue()
     assert "Select language / 選擇語言" in text and "English" in text and "繁體中文" in text
-    assert "語言已設定為繁體中文" in text and "系統總覽" in text and "離開" in text, "the menu itself appears in Chinese afterwards"
+    assert "語言已設定為繁體中文" in text and "安全狀態" in text and "離開" in text, "the menu itself appears in Chinese afterwards"
     assert i18n.resolve(host.make_ctx()) == ("zh", "system")
     assert 'language = "zh"' in host.paths.config_file.read_text()
 
@@ -145,7 +145,7 @@ def test_no_prompt_once_a_language_is_chosen(tmp_path):
     host = FakeHost(tmp_path / "r", language="en")
     ui, out = ui_for(["0"])
     run_tui(host.make_ctx(), ui)
-    assert "Select language" not in out.getvalue() and "SYSTEM OVERVIEW" in out.getvalue()
+    assert "Select language" not in out.getvalue() and "Security status" in out.getvalue()
 
 
 def test_invalid_language_answer_is_reprompted_and_english_works(tmp_path):
@@ -369,35 +369,55 @@ def tui_driver(plan):
     return answer
 
 
+ADMIN_JAIL = "[sshd]\nenabled = true\nmaxretry = 3\nbantime = 1h\n"
+
+# Every main entry and every submenu item, including nested submenus (see bant/tui/app.py and menus.py).
+FULL_WALK = (
+    ["1", "1", "2", "3", "4", "5", "6", "0"]                                   # security overview
+    + ["2"]                                                                    # one-click protection (answers "n")
+    + ["3", "1", "2", "3", "4", "5", "6", "7", "8", "1", "2", "0", "0"]        # SSH (+ advanced)
+    + ["4", "1", "2", "3", "4", "5", "6", "7", "1", "2", "3", "0",             # firewall & bans (+ firewall rules)
+       "8", "1", "2", "3", "4", "0", "5", "0", "0"]                            #   (+ advanced, conflicts -> back)
+    + ["5", "1", "1", "2", "3", "4", "5", "0", "2", "1", "2", "0",             # maintenance: Bant update, OS updates
+       "3", "1", "2", "3", "4", "5", "0", "4", "1", "2", "3", "0",             #   backups, logs
+       "5", "6", "7", "8", "9", "0"]                                           #   repair, language, version, doctor, rollback window
+    + ["6", "1", "2", "3", "0"]                                                # safe uninstall (answers "n")
+    + ["0"]
+)
+
+
 def test_every_tui_screen_in_chinese(tmp_path):
     gh = FakeGitHub()
     gh.add_release("0.2.0", prerelease=True)
     host = FakeHost(tmp_path / "r", ufw=True, language="zh")
+    (host.paths.f2b_dir / "jail.d" / "99-sshd.local").write_text(ADMIN_JAIL)
     host.http_get = gh
     i18n.set_language("zh")
-    plan = []
-    sub = {"2": 8, "3": 9, "4": 3, "5": 4, "7": 2, "8": 3, "9": 4, "10": 5, "13": 5}
-    for m in map(str, range(1, 14)):
-        plan.append(m)
-        for i in range(1, sub.get(m, 0) + 1):
-            plan.append(str(i))
-        if m in sub:
-            plan.append("0")
-    plan.append("0")
     i18n.start_recording()
-    ui, out = ui_for(tui_driver(plan))
+    ui, out = ui_for(tui_driver(FULL_WALK))
     assert run_tui(host.make_ctx(), ui) == 0
     text = out.getvalue()
     missing = i18n.stop_recording()
     assert not missing, "Untranslated messages in the TUI:\n" + "\n".join(sorted(missing))
-    for needle in ("SSH 管理", "Fail2ban 防護", "防火牆管理", "IP 黑名單／白名單", "安全稽核", "備份與復原", "更新 Bant", "再見"[:0]):
+    for needle in ("安全總覽", "一鍵安全防護", "SSH 管理", "防火牆與封禁", "維護與設定", "安全卸載", "Fail2ban 設定衝突", "再見"):
         assert needle in text, needle
+    assert "Traceback" not in text and "內部錯誤" not in text
+
+
+def test_every_tui_screen_in_english_without_crash(tmp_path):
+    host = FakeHost(tmp_path / "r", ufw=True, language="en")
+    (host.paths.f2b_dir / "jail.d" / "99-sshd.local").write_text(ADMIN_JAIL)
+    ui, out = ui_for(tui_driver(FULL_WALK))
+    assert run_tui(host.make_ctx(), ui) == 0
+    text = out.getvalue()
+    assert "Unexpected internal error" not in text and "Traceback" not in text
+    assert "Goodbye" in text or "再見" in text
 
 
 def test_tui_read_only_in_chinese(tmp_path):
     host = FakeHost(tmp_path / "r", euid=1000, language="zh")
     i18n.set_language("zh")
-    plan = ["2", "2", "0", "3", "3", "0", "10", "1", "0", "13", "2", "0", "0"]
+    plan = ["2", "3", "2", "0", "4", "4", "0", "5", "3", "1", "0", "0", "6", "1", "0", "0"]
     i18n.start_recording()
     ui, out = ui_for(tui_driver(plan))
     run_tui(host.make_ctx(), ui)
@@ -407,10 +427,10 @@ def test_tui_read_only_in_chinese(tmp_path):
 
 def test_language_menu_switches_language_live(tmp_path):
     host = FakeHost(tmp_path / "r", language="en")
-    ui, out = ui_for(tui_driver(["12", "0"]))
+    ui, out = ui_for(tui_driver(["5", "6", "0", "0"]))
     run_tui(host.make_ctx(), ui)
     text = out.getvalue()
-    assert "SYSTEM OVERVIEW" in text and "系統總覽" in text, "after choosing Chinese the next screens are in Chinese"
+    assert "Security status" in text and "安全狀態" in text, "after choosing Chinese the next screens are in Chinese"
     assert i18n.resolve(host.make_ctx())[0] == "zh"
 
 

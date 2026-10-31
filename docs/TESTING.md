@@ -56,6 +56,18 @@ console access. Record results in the release notes before tagging anything stab
 - [ ] Update while an SSH change is pending is refused; a tampered `SHA256SUMS`/asset is refused (try on a test fork)
 - [ ] `systemctl list-timers | grep bant-update` shows the daily check; `systemctl status bant-update-check.service` is not "failed" without internet
 
+**0.1.2: menu, one-click protection, uninstall, regressions**
+- [ ] Fresh VPS whose `ip_local_port_range` is `1024 65535` (or set it with `sysctl -w` on a throwaway VPS): `sudo bant setup` picks a port, no traceback (AS3 regression)
+- [ ] `sudo bant uninstall`, `--dry-run`, `--purge`, `--yes`, `--json`: none crash (AS3 regression)
+- [ ] Server with `/etc/fail2ban/jail.d/99-sshd.local` (port 667, same values as Bant): `sudo bant doctor` shows no Fail2ban override warnings (VMISS9929 regression); with a different `maxretry` it shows one, `sudo bant fail2ban conflicts --resolve adopt` keeps the jail running and banning
+- [ ] Main menu fits a phone client (Termius, ~40-50 columns) and Windows Terminal; garbage input never crashes; every submenu returns with 0
+- [ ] Menu 2 One-click protection on a fresh VPS, and again afterwards ("already enabled")
+- [ ] `install.sh` again after completed setup: program upgraded only, SSH port and password policy unchanged
+- [ ] `install.sh --no-setup`, then `install.sh` again: offers "Run the security setup now?"
+- [ ] Setup with an unreachable apt mirror: Fail2ban step reported as failed, other steps done, rerun resumes
+- [ ] Uninstall on: completed install, `--no-setup` install, failed setup, socket-activated SSH (Ubuntu 24.04), ufw default-deny (**the SSH port must stay reachable after uninstall and after a reboot**), nftables default-drop (same, via `retained-port-allow.service`)
+- [ ] Uninstall with a pending migration is refused; interrupting an uninstall (Ctrl+C) and running it again completes; after uninstall a NEW SSH login works
+
 **Coexistence**
 - [ ] With Docker, sing-box/Xray (TCP+UDP), Caddy running: no connectivity change, no rule or sysctl changes (compare `nft list ruleset`, `iptables-save`, `sysctl -a` before/after, ignoring Bant's own entries)
 

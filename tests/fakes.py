@@ -312,9 +312,12 @@ class FakeHost(Runner):
     def _f2b_settings(self) -> dict[str, str]:
         s = {"maxretry": "5", "findtime": "10m", "bantime": "10m", "port": "ssh", "banaction": "nftables",
              "backend": "systemd", "enabled": "true", "ignoreip": ""}
-        files = [self.paths.f2b_dir / "jail.local"] + sorted((self.paths.f2b_dir / "jail.d").glob("*.conf")) + \
+        # Fail2ban's order: jail.d/*.conf, jail.local, jail.d/*.local; within that [sshd] beats [DEFAULT]
+        files = sorted((self.paths.f2b_dir / "jail.d").glob("*.conf")) + [self.paths.f2b_dir / "jail.local"] + \
             sorted((self.paths.f2b_dir / "jail.d").glob("*.local"))
         import configparser
+        defaults: dict[str, str] = {}
+        jail: dict[str, str] = {}
         for f in files:
             if not f.is_file():
                 continue
@@ -323,9 +326,11 @@ class FakeHost(Runner):
                 cp.read_string(f.read_text())
             except configparser.Error:
                 continue
-            for sec in ("DEFAULT", "sshd"):
-                items = cp.defaults() if sec == "DEFAULT" else (dict(cp._sections.get("sshd", {})) if cp.has_section("sshd") else {})
-                s.update({k: v for k, v in items.items() if k != "__name__"})
+            defaults.update({k: v for k, v in cp.defaults().items() if k != "__name__"})
+            if cp.has_section("sshd"):
+                jail.update({k: v for k, v in cp._sections["sshd"].items() if k != "__name__"})
+        s.update(defaults)
+        s.update(jail)
         return s
 
     def _cmd_fail2ban_client(self, argv, _input):

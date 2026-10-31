@@ -225,16 +225,28 @@ def render_logs(ui: UI, records: list[dict[str, Any]]) -> None:
 def render_setup(ui: UI, report: dict[str, Any]) -> None:
     ui.heading(f"BANT v{__version__} SETUP")
     for s in report["steps"]:
-        mark = ui.glyph({"done": "ok", "skipped": "skip", "pending": "wait", "failed": "bad"}[s["status"]])
-        ui.text(f" {mark} {tr(s['step'])}: {tr(s['detail'])}", {"done": "ok", "pending": "warn", "failed": "bad"}.get(s["status"]), raw=True)
+        mark = ui.glyph({"done": "ok", "already": "ok", "skipped": "skip", "pending": "wait", "failed": "bad", "planned": "wait"}.get(s["status"], "skip"))
+        ui.text(f" {mark} {tr(s['step'])}: {tr(s['detail'])}",
+                {"done": "ok", "already": "ok", "pending": "warn", "failed": "bad"}.get(s["status"]), raw=True)
     ui.text("")
     outcome = report["outcome"]
-    if outcome == "complete":
+    summary = report.get("summary") or {}
+    if outcome == "dry_run":
+        ui.warn("DRY RUN - nothing was changed. The steps above show what setup would do.")
+    elif outcome == "complete":
         ui.success("Setup complete.")
     elif outcome == "pending_confirmation":
         ui.warn("Setup is NOT finished: the SSH migration is waiting for your confirmation.")
     else:
         ui.warn("Setup is incomplete - see the steps above.")
+    if outcome == "incomplete" and summary:
+        ui.section("Setup report")
+        rows = [("Completed", ", ".join(tr(x) for x in summary["completed"]) or "-", "ok"),
+                ("Not done yet", ", ".join(tr(x) for x in summary["remaining"]) or "-", None),
+                ("Rolled back", "yes - the previous SSH configuration was restored" if summary["rolled_back"] else "no", None)]
+        ui.kv(rows)
+        for f in summary["failed"]:
+            ui.text(f" {ui.glyph('bad')} {tr(f['step'])}: {tr(f['reason'])}", "bad", raw=True)
     if report.get("ssh_port"):
         from bant.core.ports import DESCRIPTIONS
         ui.text("")
@@ -272,3 +284,60 @@ def render_selfupdate_status(ui: UI, st: dict[str, Any]) -> None:
            ("Update available", "yes" if st["available"] else "no", "warn" if st["available"] else None),
            ("Daily check", "on (check only)" if st["daily_check"] else "off", None),
            ("Previous version kept", st["previous_version"] or "none", None)])
+
+
+F2B_CONFLICT_LABELS = {"conflict": ("different", "warn"), "duplicate": ("same value", "ok"), "admin-only": ("administrator only", None)}
+
+
+def render_f2b_conflicts(ui: UI, items: list[dict[str, Any]], plan: list[dict[str, str]]) -> None:
+    ui.heading("FAIL2BAN CONFIGURATION CONFLICTS")
+    if not items:
+        ui.success("No administrator file sets [sshd] options that Bant also manages.")
+        return
+    ui.text(" Fail2ban reads jail.conf, jail.d/*.conf, jail.local, jail.d/*.local in that order; [sshd] beats [DEFAULT].", "dim")
+    ui.text(" Bant leaves out of its own jail every key you define for [sshd] the next time it writes it.", "dim")
+    rows = []
+    for i in items:
+        label, _style = F2B_CONFLICT_LABELS[i["status"]]
+        if i["accepted"]:
+            label = "kept by you"
+        rows.append([i["key"], i["file"], i["value"], i["bant"] if i["bant"] is not None else "-", i["effective"] or "-", i.get("winner", ""), tr(label)])
+    ui.table(["Key", "File", "Your value", "Bant's value", "In use", "Source", "Result"], rows)
+    real = [i for i in items if i["status"] == "conflict" and not i["accepted"]]
+    if real:
+        ui.warn(f" {len(real)} setting(s) differ from what Bant would use.")
+    else:
+        ui.success("No real conflicts: overlapping settings have the same value, so no warning is needed.")
+    ui.section("If Bant takes over (adopt)")
+    for p in plan:
+        ui.text(f" {p['key']}: {p['before']} -> {p['after']}" + ("" if p["change"] == "changes" else "  (" + tr("unchanged") + ")"), raw=True)
+    ui.info(" Resolve with: sudo bant fail2ban conflicts --resolve keep   (or --resolve adopt; add --dry-run to preview)")
+
+
+def render_overview_summary(ui: UI, d: dict[str, Any]) -> None:
+    """Short version of `bant status` for the overview menu: what matters, then anything abnormal."""
+    ssh, f2b, fw = d["ssh"], d["fail2ban"], d["firewall"]
+    pk, pks = yn(ssh["pubkey_auth"])
+    pw, pws = yn(ssh["password_auth"])
+    f2_label, f2_style = F2B_LABELS.get(f2b["state"], (f2b["state"], None))
+    counts = d["findings"]["summary"]
+    ui.kv([
+        ("Security status", tr(d["health"]).upper(), style_for_state(d["health"])),
+        ("SSH port", ", ".join(map(str, ssh["ports"])) or "unknown", "ok" if len(ssh["ports"]) == 1 and ssh["ports"][0] != 22 else "warn"),
+        ("Password login", pw, pws), ("Public key auth", pk, pks),
+        ("Root login", tr(ssh["root_label"]) if ssh["root_label"] else ssh["root_login"], "warn" if ssh["root_login"] == "yes" else None),
+        ("Fail2ban", f2_label, f2_style),
+        ("Banned IPs", f"{d['bans']['fail2ban']} (Fail2ban)  {d['bans']['bant']} (Bant)", None),
+        ("Firewall", f"{fw['backend']} ({fw['mode']})" if fw["active"] else "none detected", "ok" if fw["active"] else "warn"),
+        ("Critical / High", f"{counts['critical']} / {counts['high']}", "bad" if counts["critical"] or counts["high"] else "ok"),
+    ], label_width=16)
+    alerts = [f"[{tr(f['severity']).upper()}] {tr(f['title'])}" for f in d["findings"]["critical_and_high"][:5]]
+    alerts += [tr(p) for p in f2b.get("problems", [])[:3]] + [tr(c) for c in f2b.get("conflicts", [])[:3]]
+    if ssh.get("pending"):
+        render_pending(ui, ssh["pending"])
+    if alerts:
+        ui.section("Alerts")
+        for a in alerts:
+            ui.text(f" ! {a}", "warn", raw=True)
+    else:
+        ui.success("No alerts.")

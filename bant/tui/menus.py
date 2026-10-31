@@ -34,6 +34,7 @@ from bant.presenters import (
     render_ssh,
     render_status,
     render_updates,
+    yn,
 )
 from bant.ui import UI, Abort, stream_shows_cjk
 from bant.utils.validation import (
@@ -59,6 +60,18 @@ def guarded(fn: Action) -> Action:
                 ui.info(f"  hint: {exc.hint}")
         except Abort:
             ui.warn("Cancelled.")
+        except (KeyboardInterrupt, EOFError):
+            ui.text("")
+            ui.warn("Cancelled.")
+        except Exception as exc:  # noqa: BLE001 - a menu action must never crash the whole menu
+            if type(exc).__name__ == "UninstallDone":
+                raise
+            from bant.cli import _debug_log
+
+            where = _debug_log(ctx, exc)
+            ui.error(f"Unexpected internal error ({type(exc).__name__}). Nothing further was changed by this step.")
+            if where:
+                ui.info(f"  Details for developers were saved to {where}.")
     return run
 
 
@@ -241,12 +254,31 @@ def ssh_validate(ctx: Context, ui: UI) -> None:
         ui.error(f"sshd -t: {msg}")
 
 
+def ssh_keys(ctx: Context, ui: UI) -> None:
+    st = ssh.status(ctx)
+    pk, pks = yn(st.pubkey_auth)
+    pw, pws = yn(st.password_auth)
+    ui.section("Public key authentication")
+    ui.kv([("Public key login", pk, pks), ("Password login", pw, pws)], label_width=18)
+    users = sorted({"root", *ssh.other_admin_exists()})
+    ui.table(["User", "Authorized keys"], [[u, ssh.authorized_key_count(ctx, u)] for u in users])
+    live = ssh.live_pubkey_sessions(ctx)
+    if live:
+        ui.success(f"{len(live)} open session(s) logged in with a key - password login can be turned off safely.")
+    else:
+        ui.info(" No open session logged in with a key was found. Log in with your key in a NEW terminal before turning passwords off.")
+
+
+def ssh_advanced(ctx: Context, ui: UI) -> None:
+    submenu(ctx, ui, "SSH - ADVANCED", [("1", "Auth limits (tries / grace time)", ssh_limits), ("2", "Validate sshd configuration", ssh_validate)])
+
+
 def ssh_menu(ctx: Context, ui: UI) -> None:
     submenu(ctx, ui, "SSH MANAGEMENT", [
         ("1", "View status", ssh_view), ("2", "Change SSH port", ssh_port), ("3", "Password login on/off", ssh_password),
-        ("4", "Root login policy", ssh_root), ("5", "Auth limits (tries / grace time)", ssh_limits),
+        ("4", "Public key status", ssh_keys), ("5", "Root login policy", ssh_root),
         ("6", "Confirm pending change", ssh_confirm), ("7", "Roll back pending change", ssh_rollback),
-        ("8", "Validate sshd configuration", ssh_validate),
+        ("8", "Advanced", ssh_advanced),
     ], render=lambda: render_ssh(ui, ssh.status(ctx), migration.describe_pending(ctx)))
 
 
@@ -341,6 +373,41 @@ def f2b_toggle(ctx: Context, ui: UI) -> None:
             ui.warn(fail2ban.set_enabled(ctx, False))
     else:
         ui.success(fail2ban.set_enabled(ctx, True))
+
+
+def f2b_conflicts(ctx: Context, ui: UI) -> None:
+    from bant.core import f2b_conflicts as fc
+    from bant.presenters import render_f2b_conflicts
+
+    items = fc.analyze(ctx)
+    render_f2b_conflicts(ui, items, fc.adopt_plan(ctx, items))
+    if not items or not ctx.is_root:
+        return
+    ui.menu([("1", "Keep the administrator's settings (no file changes)"), ("2", "Let Bant take over (backup, then comment out)"), ("0", "Back")])
+    choice = ui.ask("Select an option", "0")
+    if choice == "1":
+        ui.success(fc.resolve(ctx, "keep")["message"])
+    elif choice == "2" and ui.confirm("Let Bant take over these settings?", False):
+        ui.success(fc.resolve(ctx, "adopt")["message"])
+
+
+def f2b_advanced(ctx: Context, ui: UI) -> None:
+    submenu(ctx, ui, "SSH PROTECTION - ADVANCED", [
+        ("1", "Configure ban duration", f2b_set("bantime", "Ban duration (e.g. 1h, 1d)")),
+        ("2", "Configure attempt limit", f2b_set("maxretry", "Max failed attempts (1-100)")),
+        ("3", "Fail2ban detection window", settings_findtime),
+        ("4", "Fail2ban configuration conflicts", f2b_conflicts),
+        ("5", "View security events", f2b_events),
+    ], render=lambda: (ui.heading("SSH PROTECTION - ADVANCED"), settings_show(ctx, ui)))
+
+
+def firewall_bans_menu(ctx: Context, ui: UI) -> None:
+    submenu(ctx, ui, "FIREWALL & BANS", [
+        ("1", "Fail2ban status", f2b_status), ("2", "Enable / disable Fail2ban", f2b_toggle),
+        ("3", "View banned IPs", f2b_banned), ("4", "Ban an IP", f2b_ban), ("5", "Unban an IP", f2b_unban),
+        ("6", "Manage trusted IPs", f2b_trusted), ("7", "Firewall rules & open ports", fw_menu),
+        ("8", "SSH protection settings (advanced)", f2b_advanced),
+    ], render=lambda: render_fail2ban(ui, fail2ban.overview(ctx)))
 
 
 def f2b_menu(ctx: Context, ui: UI) -> None:
@@ -585,3 +652,118 @@ def selfupdate_menu(ctx: Context, ui: UI) -> None:
         ("1", "Check for updates", su_check), ("2", "Install the update", su_apply), ("3", "Roll back to the previous version", su_rollback),
         ("4", "Daily update check on / off", su_notify), ("5", "Update channel", su_channel),
     ], render=lambda: render_selfupdate_status(ui, updater.status(ctx)))
+
+
+# ---------------------------------------------------------------------------
+# Main menu groups (0.1.2): overview, one-click protection, maintenance, uninstall
+# ---------------------------------------------------------------------------
+
+def overview_summary(ctx: Context, ui: UI) -> None:
+    from bant.presenters import render_overview_summary
+
+    render_overview_summary(ui, status.collect(ctx))
+
+
+def full_diagnostics(ctx: Context, ui: UI) -> None:
+    ui.info("Running diagnostics...")
+    render_doctor(ui, status.doctor(ctx))
+
+
+def overview_menu(ctx: Context, ui: UI) -> None:
+    submenu(ctx, ui, "SECURITY OVERVIEW", [
+        ("1", "Full diagnostics (doctor)", full_diagnostics), ("2", "Security audit", audit),
+        ("3", "SSH details", ssh_view), ("4", "Fail2ban details", f2b_status), ("5", "Firewall details", fw_view),
+        ("6", "System information", system_info),
+    ], render=lambda: (ui.heading("SECURITY OVERVIEW"), overview_summary(ctx, ui)))
+
+
+def protect(ctx: Context, ui: UI) -> None:
+    """One-click protection: the same `setup` the installer runs. Safe to repeat."""
+    from bant.cli import _ask_ssh_port
+    from bant.core import setup
+    from bant.core.rollback import TxManager
+    from bant.presenters import render_setup
+
+    ui.clear()
+    ui.heading("ONE-CLICK PROTECTION")
+    if not need_root(ctx, ui, "One-click protection"):
+        return
+    state = setup.initialized(ctx)
+    ui.text(" Bant will check and, where needed, set up:", "title")
+    for line in ("system check and a backup of the original configuration",
+                 "Fail2ban (installed, configured for your SSH port and verified)",
+                 "firewall detection (existing rules are kept)",
+                 "SSH on a random free port, or one you choose (e.g. 667): the old port stays open until a NEW login works and you confirm",
+                 "a final check that SSH and Fail2ban work"):
+        ui.bullet(line)
+    ui.info(" Password login is not changed. Anything already set up is reported as 'already enabled' and not repeated.")
+    if state == "complete":
+        ui.success("Security setup was already completed on this server; running it again only re-checks.")
+    if not ui.confirm("Start now?", True):
+        return
+    port = None
+    if not TxManager(ctx).pending():
+        port = _ask_ssh_port(ctx, ui)
+    report = setup.run(ctx, port=port)
+    render_setup(ui, report)
+
+
+def version_info(ctx: Context, ui: UI) -> None:
+    from bant.presenters import render_selfupdate_status
+
+    render_selfupdate_status(ui, updater.status(ctx))
+
+
+def maintenance_menu(ctx: Context, ui: UI) -> None:
+    submenu(ctx, ui, "MAINTENANCE & SETTINGS", [
+        ("1", "Update Bant", selfupdate_menu), ("2", "System security updates", updates_menu),
+        ("3", "Backup & restore", backup_menu), ("4", "Security logs", logs_menu),
+        ("5", "Repair configuration", bk_repair), ("6", "Language / 語言", language_menu),
+        ("7", "Version information", version_info), ("8", "Advanced diagnostics", full_diagnostics),
+        ("9", "Rollback window", settings_rollback),
+    ])
+
+
+def _uninstall(ctx: Context, ui: UI, *, purge: bool, preview: bool) -> None:
+    from bant.cli import render_uninstall_preview, render_uninstall_result
+    from bant.core import uninstall
+
+    if not need_root(ctx, ui, "Uninstalling Bant"):
+        return
+    pre = uninstall.preflight(ctx)
+    render_uninstall_preview(ui, pre, uninstall.inventory(ctx, purge=purge, pre=pre))
+    if preview or pre["blockers"]:
+        if pre["blockers"]:
+            ui.error("Uninstall is not possible right now - nothing was changed.")
+        return
+    question = ("Remove Bant AND delete its configuration, backups and logs?" if purge else "Remove Bant (configuration and backups are kept)?")
+    if not ui.confirm(question, False):
+        return
+    if purge and ui.ask("Type 'delete' to confirm the full removal", translate=True).strip().lower() not in ("delete", "刪除"):
+        ui.warn("Cancelled.")
+        return
+    res = uninstall.run(ctx, purge=purge)
+    render_uninstall_result(ui, res)
+    ui.warn("Bant has been removed. This menu closes when you press Enter.")
+    raise UninstallDone
+
+
+class UninstallDone(Exception):
+    """Raised after a successful uninstall so the menu loop exits."""
+
+
+def uninstall_menu(ctx: Context, ui: UI) -> None:
+    def std(c, u):
+        _uninstall(c, u, purge=False, preview=False)
+
+    def full(c, u):
+        _uninstall(c, u, purge=True, preview=False)
+
+    def prev(c, u):
+        _uninstall(c, u, purge=False, preview=True)
+    submenu(ctx, ui, "SAFE UNINSTALL", [
+        ("1", "Standard uninstall (keep configuration and backups)", std),
+        ("2", "Full removal of Bant data", full),
+        ("3", "Preview what would be removed", prev),
+    ], render=lambda: (ui.heading("SAFE UNINSTALL"),
+                       ui.info(" SSH stays on its current port, Fail2ban keeps protecting it, and rules Bant did not create are not touched.")))

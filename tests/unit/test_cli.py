@@ -274,18 +274,22 @@ def test_uninstall_via_cli_keeps_listener(host):
 def test_uninstall_dry_run(host):
     setup.run(host.make_ctx(), port=667)
     rc, out = run(host, "uninstall", "--dry-run")
-    assert rc == 0 and "DRY RUN" in out and host.paths.ssh_dropin.exists()
+    assert rc == 1 and "waiting for confirmation" in " ".join(out.split()) and host.paths.ssh_dropin.exists(), "a pending migration blocks uninstall, even in the preview"
 
 
 def test_tui_starts_and_navigates(host):
     from bant.tui.app import run_tui
     out = io.StringIO()
-    inputs = iter(["2", "", "0", "3", "0", "x", "", "q"])
+    inputs = iter(["3", "", "0", "4", "0", "x", "", "99", "", "q"])
     ui = UI(stream=out, color=False, force_plain=True, input_fn=lambda p="": next(inputs))
     assert run_tui(host.make_ctx(), ui) == 0
     text = out.getvalue()
-    assert "SYSTEM OVERVIEW" in text and "SSH MANAGEMENT" in text and "FAIL2BAN PROTECTION" in text
-    assert "Unknown option" in text and "Goodbye" in text
+    assert "Security status" in text and "SSH MANAGEMENT" in text and "FAIL2BAN" in text
+    assert text.count("Unknown option") == 2 and "Goodbye" in text
+    for label in ("Security overview", "One-click protection", "SSH management", "Firewall & bans", "Maintenance & settings", "Safe uninstall"):
+        assert label in text
+    menu = [line for line in text.splitlines() if line.strip()[:2].rstrip(".").isdigit()]
+    assert len({line for line in menu if line.strip()[0] in "0123456"}) <= 7 + 20  # main menu: six entries plus Exit
 
 
 def test_tui_ctrl_c_exits_cleanly(host):

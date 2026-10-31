@@ -178,35 +178,38 @@ def _is_bant_file(path: Path) -> bool:
     return "bant" in path.name or path.name.startswith("zz-sshd-protection")
 
 
-def admin_files(ctx: Context) -> list[Path]:
-    """Jail config files that may carry administrator intent (excludes Bant's and distro-shipped files)."""
+def read_order(ctx: Context) -> list[Path]:
+    """Jail files in the order Fail2ban reads them (a later file overrides an earlier one):
+    jail.conf, jail.d/*.conf, jail.local, jail.d/*.local - each group alphabetically."""
     base = ctx.paths.f2b_dir
-    cands = [base / "jail.local"]
     jd = base / "jail.d"
-    if jd.is_dir():
-        cands += sorted(p for p in jd.iterdir() if p.suffix in (".conf", ".local"))
-    out = []
-    for p in cands:
-        if not p.is_file() or _is_bant_file(p) or p.name in DISTRO_FILES:
-            continue
-        out.append(p)
-    return out
+    files = sorted(jd.glob("*.conf")) if jd.is_dir() else []
+    files = [base / "jail.conf", *files, base / "jail.local", *(sorted(jd.glob("*.local")) if jd.is_dir() else [])]
+    return [p for p in files if p.is_file()]
+
+
+def admin_files(ctx: Context) -> list[Path]:
+    """Jail config files that may carry administrator intent (excludes Bant's and distro-shipped files), in read order."""
+    return [p for p in read_order(ctx) if not _is_bant_file(p) and p.name not in DISTRO_FILES]
+
+
+def _sections(path: Path) -> dict[str, dict[str, str]]:
+    cp = configparser.RawConfigParser(strict=False, interpolation=None)
+    cp.optionxform = str  # type: ignore[assignment,method-assign]
+    try:
+        cp.read_string(read_text(path))
+    except configparser.Error:
+        return {}
+    return {"DEFAULT": dict(cp.defaults()), JAIL: dict(cp._sections.get(JAIL, {}))}  # type: ignore[attr-defined]
 
 
 def admin_defined(ctx: Context) -> dict[str, tuple[Path, str, str]]:
-    """key -> (file, section, value) for MANAGED_KEYS set by the administrator for [sshd] or [DEFAULT]."""
+    """key -> (file, section, value) for MANAGED_KEYS set by the administrator for [sshd] or [DEFAULT] (last definition wins)."""
     found: dict[str, tuple[Path, str, str]] = {}
     for path in admin_files(ctx):
-        cp = configparser.RawConfigParser(strict=False, interpolation=None)
-        cp.optionxform = str  # type: ignore[assignment,method-assign]
-        try:
-            cp.read_string(read_text(path))
-        except configparser.Error:
-            continue
-        sections = {"DEFAULT": dict(cp.defaults()), JAIL: dict(cp._sections.get(JAIL, {}))}  # type: ignore[attr-defined]
-        for section, items in sections.items():
+        for section, items in _sections(path).items():
             for key, value in items.items():
-                if key in MANAGED_KEYS:
+                if key in MANAGED_KEYS and not (section == "DEFAULT" and key in found and found[key][1] == JAIL):
                     found[key] = (path, section, str(value).strip())
     return found
 
@@ -317,16 +320,10 @@ def render_jail(settings: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def desired_settings(ctx: Context, ports: list[int]) -> tuple[dict[str, str], list[str]]:
-    """Compute the settings Bant writes, plus conflict notes for keys the administrator owns.
-
-    Administrator values always win unless the user explicitly set that key through Bant
-    (then only a [sshd]-section override still blocks it, and is reported as a conflict).
-    """
-    explicit = set(ctx.state.get("fail2ban", "explicit", default=[]) or [])
+def bant_wanted(ctx: Context, ports: list[int], owned: dict[str, tuple[Path, str, str]] | None = None) -> dict[str, str]:
+    """Everything Bant would like the sshd jail to say, before administrator-owned keys are taken out."""
     cfg = ctx.config
-    owned = admin_defined(ctx)
-    conflicts: list[str] = []
+    owned = admin_defined(ctx) if owned is None else owned
     wanted = {
         "enabled": "true",
         "port": ",".join(str(p) for p in sorted(set(ports))),
@@ -350,6 +347,22 @@ def desired_settings(ctx: Context, ports: list[int]) -> tuple[dict[str, str], li
         previous = set(ctx.state.get("fail2ban", "trusted_applied", default=[]) or [])
         base = [i for i in cur.get("ignoreip", []) if i not in set(trusted) | previous]
         wanted["ignoreip"] = " ".join(merged_ignoreip(base, trusted))
+    for key, value in (ctx.state.get("fail2ban", "carried", default={}) or {}).items():
+        if key in MANAGED_KEYS and key not in wanted:
+            wanted[key] = str(value)  # taken over from an administrator file with `fail2ban conflicts --resolve adopt`
+    return wanted
+
+
+def desired_settings(ctx: Context, ports: list[int]) -> tuple[dict[str, str], list[str]]:
+    """Compute the settings Bant writes, plus conflict notes for keys the administrator owns.
+
+    Administrator values always win unless the user explicitly set that key through Bant
+    (then only a [sshd]-section override still blocks it, and is reported as a conflict).
+    """
+    explicit = set(ctx.state.get("fail2ban", "explicit", default=[]) or [])
+    owned = admin_defined(ctx)
+    conflicts: list[str] = []
+    wanted = bant_wanted(ctx, ports, owned)
     for key in list(wanted):
         if key in owned and owned[key][1] == JAIL and key != "ignoreip":
             path, _, value = owned[key]
@@ -418,7 +431,11 @@ def apply_policy(ctx: Context, ports: list[int] | None = None, *, tx=None, txm=N
     if ctx.dry_run:
         for p in targets:
             ctx.planned.append(f"write {p}")
-        return {"settings": settings, "conflicts": conflicts, "ports": ports}
+        return {"settings": settings, "conflicts": conflicts, "ports": ports, "unchanged": False}
+    if tx is None and all(p.exists() and p.read_text() == body for p, body in targets.items()) \
+            and unit_active(ctx, "fail2ban.service") and jail_status(ctx) is not None \
+            and sorted(parse_ports(effective_jail(ctx).get("port", ""))) == sorted(set(ports)):
+        return {"settings": settings, "conflicts": conflicts, "ports": ports, "unchanged": True}  # nothing to do, no reload
 
     originals = {p: (p.read_bytes() if p.exists() else None) for p in (jail_path, filter_path)}
     if tx is not None:
@@ -449,7 +466,7 @@ def apply_policy(ctx: Context, ports: list[int] | None = None, *, tx=None, txm=N
     applied = list(ctx.config.trusted_ips)
     ctx.state.update(lambda d: d.setdefault("fail2ban", {}).__setitem__("trusted_applied", applied))
     ctx.audit("fail2ban.policy", ports=ports, settings=settings, conflicts=conflicts)
-    return {"settings": settings, "conflicts": conflicts, "ports": ports}
+    return {"settings": settings, "conflicts": conflicts, "ports": ports, "unchanged": False}
 
 
 def _reload(ctx: Context) -> None:
@@ -655,8 +672,9 @@ def _overview(ctx: Context, ssh_ports: list[int] | None) -> Overview:
     failed = [c for c in ov.checks if c.ok is False]
     ov.problems += [f"{c.name}: {c.detail}" for c in failed]
     ov.state = "misconfigured" if failed else ("verified" if all(c.ok for c in ov.checks) else "running")
-    admin = admin_defined(ctx)
-    for key, (path, section, value) in admin.items():
-        if section == JAIL and key in ("port", "enabled", "maxretry", "findtime", "bantime"):
-            ov.conflicts.append(f"{path.name}: [sshd] {key} = {value}")
+    from bant.core import f2b_conflicts
+
+    for c in f2b_conflicts.analyze(ctx, ssh_ports):
+        if c["status"] == "conflict" and not c["accepted"]:
+            ov.conflicts.append(f"{c['file']}: [sshd] {c['key']} = {c['value']} (Bant would use {c['bant']})")
     return ov

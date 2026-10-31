@@ -8,6 +8,7 @@ so server-provided strings can never inject markup.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import unicodedata
 from collections.abc import Iterable, Sequence
@@ -81,12 +82,18 @@ class UI:
     @property
     def width(self) -> int:
         cols = self.console.width if self.rich else _term_width()
-        return max(40, min(cols, 78))
+        return max(30, min(cols, 72))  # phone SSH clients are often 40-50 columns wide
+
+    @property
+    def narrow(self) -> bool:
+        return self.width < 50
 
     # ---- basic output ------------------------------------------------------
-    def text(self, message: str = "", style: str | None = None, *, raw: bool = False) -> None:
+    def text(self, message: str = "", style: str | None = None, *, raw: bool = False, fold: bool = True) -> None:
         """Print a message (translated). raw=True prints data such as log lines untouched."""
         message = message if raw else tr(message)
+        if fold and not self.rich and "\n" not in message and display_width(message) > self.width:
+            message = "\n".join(wrap(message, self.width))
         if self.rich:
             self.console.print(Text(message, style=STYLES.get(style or "", "")) if style else Text(message))
         else:
@@ -123,6 +130,12 @@ class UI:
 
     def heading(self, title: str, subtitle: str | None = None) -> None:
         title, subtitle = tr(title), (tr(subtitle) if subtitle else None)
+        if self.narrow:  # no box on small screens: two plain lines
+            self.text(f" {title}", "title", raw=True)
+            if subtitle:
+                self.text(f" {subtitle}", "dim", raw=True)
+            self.rule()
+            return
         if self.rich and self.unicode:
             body = Text(title, style="bold", justify="center")
             if subtitle:
@@ -138,11 +151,14 @@ class UI:
 
     def section(self, title: str) -> None:
         self.text("")
-        self.text(f" {tr(title).upper()}", "title", raw=True)
+        t = tr(title)
+        self.text(f" {t if _CJK.search(t) else t.upper()}", "title", raw=True)
         self.rule()
 
     # ---- structured output -------------------------------------------------
     def kv(self, rows: Iterable[tuple[str, Any, str | None]], label_width: int = 24) -> None:
+        if self.narrow:
+            label_width = min(label_width, 14)
         for label, value, style in rows:
             shown = tr(value, record=False) if isinstance(value, str) else value  # values are mostly data; the static scan covers templates
             self.text(f" {pad(tr(label), label_width)} {shown}", style, raw=True)
@@ -162,9 +178,9 @@ class UI:
             self.console.print(t)
             return
         widths = [max(display_width(str(h)), *(display_width(str(r[i])) for r in rows)) for i, h in enumerate(headers)]
-        self.text("  ".join(pad(str(h), w) for h, w in zip(headers, widths, strict=True)), "title", raw=True)
+        self.text("  ".join(pad(str(h), w) for h, w in zip(headers, widths, strict=True)), "title", raw=True, fold=False)
         for r in rows:
-            self.text("  ".join(pad(str(c), w) for c, w in zip(r, widths, strict=True)), raw=True)
+            self.text("  ".join(pad(str(c), w) for c, w in zip(r, widths, strict=True)), raw=True, fold=False)
 
     def menu(self, items: Sequence[tuple[str, str]]) -> None:
         for key, label in items:
@@ -204,6 +220,30 @@ class UI:
         if self.color and getattr(self.stream, "isatty", lambda: False)():
             self.stream.write("\033[2J\033[H")
             self.stream.flush()
+
+
+_CJK = re.compile(r"[\u3000-\u9fff\uff00-\uffef]")
+
+
+def wrap(text: str, width: int) -> list[str]:
+    """Wrap by display width (CJK characters count double); continuation lines keep the leading indent."""
+    indent = " " * (len(text) - len(text.lstrip(" ")) + (2 if text.lstrip().startswith(("!", "•", "-", "✔", "✘")) else 0))
+    lines, cur = [], ""
+    for token in re.findall(r"\S+\s*|\s+", text):
+        if display_width(cur + token.rstrip()) <= width or not cur.strip():
+            cur += token
+            while display_width(cur.rstrip()) > width:  # a single long token (or CJK run): hard break
+                cut = len(cur)
+                while cut > 1 and display_width(cur[:cut]) > width:
+                    cut -= 1
+                lines.append(cur[:cut].rstrip())
+                cur = indent + cur[cut:]
+            continue
+        lines.append(cur.rstrip())
+        cur = indent + token
+    if cur.strip():
+        lines.append(cur.rstrip())
+    return lines or [text]
 
 
 def _term_width() -> int:

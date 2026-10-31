@@ -1,4 +1,4 @@
-"""Interactive terminal UI main loop."""
+"""Interactive terminal UI main loop (0.1.2: six entries, details live in submenus)."""
 
 from __future__ import annotations
 
@@ -8,21 +8,14 @@ from bant.tui import dashboard, menus
 from bant.ui import UI, Abort
 
 MAIN_ITEMS = [
-    ("1", "Security Overview", menus.overview),
-    ("2", "SSH Management", menus.ssh_menu),
-    ("3", "Fail2ban Protection", menus.f2b_menu),
-    ("4", "Firewall Management", menus.fw_menu),
-    ("5", "IP Blacklist / Allowlist", menus.ip_menu),
-    ("6", "Security Audit", menus.audit),
-    ("7", "Security Updates", menus.updates_menu),
-    ("8", "Security Logs", menus.logs_menu),
-    ("9", "Protection Settings", menus.settings_menu),
-    ("10", "Backup & Recovery", menus.backup_menu),
-    ("11", "System Information", menus.system_info),
-    ("12", "Language / 語言", menus.language_menu),
-    ("13", "Update Bant", menus.selfupdate_menu),
+    ("1", "Security overview", menus.overview_menu),
+    ("2", "One-click protection", menus.protect),
+    ("3", "SSH management", menus.ssh_menu),
+    ("4", "Firewall & bans", menus.firewall_bans_menu),
+    ("5", "Maintenance & settings", menus.maintenance_menu),
+    ("6", "Safe uninstall", menus.uninstall_menu),
 ]
-DIRECT = {"1", "6", "11"}  # screens that print and return (need a pause); others are menus that pause themselves
+DIRECT = {"2"}  # screens that print and return (need a pause); others are menus that pause themselves
 
 
 def run_tui(ctx: Context, ui: UI) -> int:
@@ -35,7 +28,10 @@ def run_tui(ctx: Context, ui: UI) -> int:
             dashboard.draw(ctx, ui)
             ui.menu([(k, label) for k, label, _ in MAIN_ITEMS] + [("0", "Exit")])
             ui.rule()
-            choice = ui.ask("Select an option").lower()
+            try:
+                choice = ui.ask("Select an option").strip().lower()
+            except Abort:
+                break
             if choice in ("0", "q", "quit", "exit"):
                 break
             if choice in ("r", ""):
@@ -46,7 +42,7 @@ def run_tui(ctx: Context, ui: UI) -> int:
                 continue
             fn = table.get(choice)
             if fn is None:
-                ui.warn(f"Unknown option '{choice}'.")
+                ui.warn(f"Unknown option '{choice}'. Type a number from the list.")
                 ui.pause()
                 continue
             try:
@@ -55,7 +51,13 @@ def run_tui(ctx: Context, ui: UI) -> int:
                     ui.pause()
             except Abort:
                 continue
-    except (Abort, KeyboardInterrupt):
+            except menus.UninstallDone:
+                try:
+                    ui.pause()
+                except Abort:
+                    pass
+                return 0
+    except (Abort, KeyboardInterrupt, EOFError):
         ui.text("")
     ui.text("Goodbye.")
     return 0

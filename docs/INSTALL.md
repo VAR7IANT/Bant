@@ -17,8 +17,12 @@ git clone https://github.com/VAR7IANT/Bant.git && cd Bant
 sudo bash install.sh            # add --yes for non-interactive apt
 ```
 
-Options: `--no-setup`, `--no-ssh-migration`, `--no-fail2ban`, `--ssh-port N`, `--minutes N`,
-`--force-unsupported`, `--dry-run` (see `bash install.sh --help`).
+Options: `--no-setup`, `--no-ssh-migration`, `--no-fail2ban`, `--no-update-check`, `--ssh-port N|random`,
+`--minutes N`, `--force-unsupported`, `--dry-run` (see `bash install.sh --help`).
+
+`--no-setup` installs **only the program**: the security setup does not run, and nothing about SSH or
+Fail2ban changes. The menu then says "Bant is installed, but security setup has not been run yet"; run it
+with `sudo bant setup` or menu **2 One-click protection**.
 
 What happens, in order:
 
@@ -27,10 +31,28 @@ What happens, in order:
 3. Program files to `/opt/bant/lib` (replaced atomically), launcher `/usr/local/bin/bant`
    (isolated interpreter, ignores `PYTHONPATH`), `/opt/bant/emergency-recovery.sh`,
    `bant-firewall.service`.
-4. `bant setup`: baseline backup -> Fail2ban (reuse or install, Bant-owned jail) -> SSH migration.
+4. `bant setup`: system check -> backup of the original configuration -> Fail2ban (reuse or install,
+   Bant-owned jail) -> firewall detection -> SSH migration -> verification. Password login is never changed here.
 
-Re-running the installer is safe: configuration and state are preserved, an open migration is not
-duplicated, no duplicate directives/rules/units are created.
+Re-running the installer is safe and decides by itself:
+
+| Situation | What the installer does |
+|---|---|
+| fresh server | installs, runs the setup |
+| setup already completed | upgrades the program only; SSH port, password policy, Fail2ban, firewall, backups and state are kept |
+| an SSH change waits for confirmation | upgrades the program only and tells you to confirm |
+| installed earlier with `--no-setup`, or setup unfinished | says "security setup is not complete" and offers to run it now (with `--yes`: runs it) |
+
+If the setup fails, the installer does not just exit: the report lists the failed step and its reason, what
+was completed, what is still to do, whether an SSH change was rolled back, and how to continue. Running
+`sudo bant setup` again resumes - finished steps are skipped.
+
+**Random SSH port.** Bant picks a free port from 10240-65535 outside the kernel's outgoing-connection
+(ephemeral) range, avoiding ports anything listens on (TCP or UDP) and ports popular software uses. Some VPS
+images set that range to almost everything (e.g. `1024 65535`); then Bant uses ports from
+`ip_local_reserved_ports`, or a port inside the range that no socket uses at all - once sshd listens on it
+the kernel no longer hands it out. Only if no port passes these checks does Bant stop - with an explanation,
+asking for a port (interactive) or suggesting `--ssh-port 667` - while the other setup steps still run.
 
 ## The SSH migration, step by step
 
@@ -99,9 +121,35 @@ Configuration (`/etc/bant`), state (`/var/lib/bant`) and Bant-managed SSH/Fail2b
 ## Uninstall
 
 ```bash
-sudo bant uninstall            # shows exactly what will happen; --dry-run to preview
+sudo bant uninstall --dry-run  # preview: safety checks and every item with what will happen to it
+sudo bant uninstall            # standard: asks before doing anything
+sudo bant uninstall --purge    # full removal of Bant's own data as well
 ```
 
-SSH stays on its current port (settings are kept as `00-ssh-hardening.conf`, no longer branded),
-Fail2ban stays installed with its SSH jail settings retained, and only firewall rules recorded in
-Bant's registry are removed. `--purge` also deletes backups, logs and configuration.
+Or from the menu: **6 Safe uninstall** -> 1 standard / 2 full removal / 3 preview.
+
+Before anything changes Bant checks your SSH session, that sshd's configuration is valid and listening,
+and that no SSH change is waiting for confirmation (if one is, it refuses and tells you to `ssh confirm`
+or `ssh rollback` - it never finishes or breaks a migration for you). Then it takes a backup; if that is
+impossible it stops without changing anything.
+
+| | Standard | Full removal (`--purge`) |
+|---|---|---|
+| Bant program, `bant` command, Bant systemd units, update-check timer | removed | removed |
+| SSH port and authentication settings | **kept** (`00-ssh-hardening.conf`), never reverted to 22 | **kept** |
+| Fail2ban package, service and SSH jail | **kept** (`zz-sshd-protection.local`); never stopped or uninstalled | **kept** |
+| Firewall allowances Bant made that are still needed (your SSH port, ports something listens on) | **kept** | **kept** |
+| Bant allowances for ports nothing listens on any more, Bant's own IP-block table | removed | removed |
+| Rules Bant did not create | untouched | untouched |
+| Bant configuration, backups, logs, state | kept | deleted (after all checks passed) |
+
+For nftables/iptables, whose rules do not survive a reboot on their own, the kept allowances are re-created
+at boot by a small de-branded unit, `retained-port-allow.service` (its script explains how to remove it).
+Removing Fail2ban itself is your decision: `apt remove fail2ban` (Bant never does it).
+`--remove-fail2ban-config` deletes the retained jail - the sshd jail then falls back to the distribution
+default (port 22).
+
+After the change Bant verifies that sshd's configuration is valid, SSH still listens on the same ports, the
+Fail2ban sshd jail runs and the kept firewall allowances exist. If any check fails, every file it changed is
+restored and Bant stays installed. The program files are removed last, so an interrupted uninstall can simply
+be run again; things already gone are skipped.

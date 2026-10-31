@@ -48,7 +48,7 @@ def test_setup_port_conflict_is_reported_not_forced(host, ctx):
     host.listening[667] = "caddy"
     rep = setup.run(ctx, port=667)
     mig = next(s for s in rep["steps"] if s["step"] == "ssh-migration")
-    assert mig["status"] == "skipped" and "caddy" in mig["detail"]
+    assert mig["status"] == "failed" and "caddy" in mig["detail"]
     assert rep["outcome"] == "incomplete"
     assert not ctx.paths.ssh_dropin.exists() and host.listening[22] == "sshd"
 
@@ -71,7 +71,7 @@ def test_setup_without_openssh_skips_ssh(tmp_path):
     host = FakeHost(tmp_path / "r", ssh_installed=False)
     ctx = host.make_ctx()
     rep = setup.run(ctx)
-    assert next(s for s in rep["steps"] if s["step"] == "ssh")["status"] == "skipped"
+    assert next(s for s in rep["steps"] if s["step"] == "ssh-migration")["status"] == "skipped"
 
 
 def test_setup_runs_with_firewall_ufw(tmp_path):
@@ -206,14 +206,18 @@ def test_uninstall_removes_only_registry_firewall_rules(tmp_path):
     ctx = host.make_ctx()
     _installed_and_confirmed(host, ctx)
     assert "667/tcp" in host.ufw_rules
+    res = firewall.allow_port(ctx, 8443, "tcp")  # Bant-owned, but nothing listens on 8443
+    firewall.commit_rules(ctx, res.rules)
     uninstall.run(ctx)
-    assert "667/tcp" not in host.ufw_rules and "443/tcp" in host.ufw_rules
+    assert "667/tcp" in host.ufw_rules, "the SSH allowance is still needed and must be kept (ufw default-deny would lock you out)"
+    assert "8443/tcp" not in host.ufw_rules, "an unneeded Bant-owned allowance is removed"
+    assert "443/tcp" in host.ufw_rules, "rules Bant did not create are never touched"
     assert firewall.registry(ctx) == []
 
 
 def test_uninstall_refused_with_pending_transaction(host, ctx):
     setup.run(ctx, port=667)
-    with pytest.raises(OperationFailed, match="pending"):
+    with pytest.raises(OperationFailed, match="waiting for confirmation"):
         uninstall.run(ctx)
 
 
@@ -279,7 +283,7 @@ def test_existing_custom_ssh_port_is_kept_not_randomised(host, ctx):
     host.listening = {2222: "sshd"}
     rep = setup.run(ctx)
     assert rep["ssh_port"] == 2222 and rep["port_source"] == "existing"
-    assert next(s for s in rep["steps"] if s["step"] == "ssh-migration")["status"] == "done"
+    assert next(s for s in rep["steps"] if s["step"] == "ssh-migration")["status"] == "already"
     assert not TxManager(ctx).pending() and ctx.config.ssh_port == 2222
     assert set(host.listening) == {2222}
 

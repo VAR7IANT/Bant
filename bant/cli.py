@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -180,6 +181,9 @@ def build_parser() -> argparse.ArgumentParser:
     fadd("trusted", "list trusted (never banned) addresses", cmd_trusted)
     sp = fadd("trust", "add a trusted address", cmd_trust)
     sp.add_argument("ip")
+    sp = fadd("conflicts", "compare administrator [sshd] settings with Bant's jail; optionally resolve them", cmd_f2b_conflicts)
+    sp.add_argument("--resolve", choices=["keep", "adopt"], help="keep = the administrator keeps managing them; adopt = Bant takes over")
+    sp.add_argument("--key", action="append", help="only this key (repeatable)")
     sp = fadd("untrust", "remove a trusted address", cmd_untrust)
     sp.add_argument("ip")
 
@@ -264,6 +268,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("outcome")
     p.set_defaults(handler=cmd_tx_finish)
     sub.add_parser("_fw-apply", parents=[common]).set_defaults(handler=cmd_fw_apply)
+    sub.add_parser("_setup-state", parents=[common]).set_defaults(handler=cmd_setup_state)
     return parser
 
 
@@ -405,7 +410,7 @@ def cmd_ssh_port(args, ctx, ui) -> int:
     if ctx.dry_run:
         ctx.planned += [f"open TCP {port} in firewall", "update Fail2ban policy", "arm persistent rollback timer",
                         f"configure sshd to listen on {sorted(set(p.old_ports + [port]))}"]
-        _plan_footer(ctx, ui)
+        emit(args, ui, {"dry_run": True, "port": port, "port_source": source, "planned": ctx.planned}, lambda: _plan_footer(ctx, ui))
         return EX_OK
     out = migration.begin(ctx, port, minutes=args.minutes)
 
@@ -515,6 +520,26 @@ def _all_bans(ctx: Context) -> list[dict[str, Any]]:
         rows.append({"ip": e["ip"], "source": "bant", "jail": "-", "reason": e.get("reason", ""),
                      "expires": fmt_ts(e["expires"]) if e.get("expires") else "never"})
     return rows
+
+
+def cmd_f2b_conflicts(args, ctx, ui) -> int:
+    from bant.core import f2b_conflicts
+    from bant.presenters import render_f2b_conflicts
+
+    items = f2b_conflicts.analyze(ctx)
+    if not args.resolve:
+        data = {"items": items, "summary": f2b_conflicts.summary(items)}
+        emit(args, ui, data, lambda: render_f2b_conflicts(ui, items, f2b_conflicts.adopt_plan(ctx, items)))
+        return EX_OK
+    ctx.require_root("Resolving Fail2ban configuration conflicts")
+    if not args.json:
+        render_f2b_conflicts(ui, items, f2b_conflicts.adopt_plan(ctx, items))
+    if items and not _need_confirm(args, ui, "Let Bant take over these settings? (the administrator lines are commented out, after a backup)"
+                                   if args.resolve == "adopt" else "Keep the administrator's settings and stop warning about them?", True):
+        return EX_ERROR
+    res = f2b_conflicts.resolve(ctx, args.resolve, keys=args.key)
+    emit(args, ui, res, lambda: (ui.success(res["message"]) if "message" in res else None, _plan_footer(ctx, ui)))
+    return EX_OK
 
 
 def cmd_banned(args, ctx, ui) -> int:
@@ -676,17 +701,33 @@ def cmd_repair(args, ctx, ui) -> int:
 
 def _ask_ssh_port(ctx: Context, ui: UI) -> int | None:
     """Interactive installs: show the random port Bant would use and let the user accept, change or reroll it."""
-    candidate, source = ports.resolve_target(ctx, None)
+    try:
+        candidate, source = ports.resolve_target(ctx, None)
+    except ports.NoFreePort as exc:
+        ui.section("SSH port")
+        ui.warn(exc.message)
+        ui.info(" Type the SSH port you want to use (for example 667).")
+        while True:
+            try:
+                return parse_port(ui.ask("SSH port"))
+            except ValidationError as err:
+                ui.error(err.message)
     if source not in ("random", "remembered"):
         return None  # already decided (configured, or an existing custom port is kept)
     ui.section("SSH port")
     ui.text(f" Bant will move SSH to a random free port: {candidate}")
+    if ports.random_strategy(ctx, candidate) == "ephemeral":
+        ui.warn(" This server's outgoing-connection port range covers every usual choice; this port was checked to be completely unused.")
     ui.info(" Press Enter to accept, type your own port number, or 'r' for another random port.")
     ui.info(" Remember to allow that port in your VPS provider's firewall/security group, if it has one.")
     while True:
         answer = ui.ask("SSH port", str(candidate)).strip().lower()
         if answer in ("r", "random"):
-            candidate = ports.pick_random(ctx, exclude=[candidate])
+            try:
+                candidate = ports.pick_random(ctx, exclude=[candidate])
+            except ports.NoFreePort as exc:
+                ui.warn(exc.message)
+                continue
             ui.text(f" New random port: {candidate}")
             continue
         try:
@@ -698,6 +739,8 @@ def _ask_ssh_port(ctx: Context, ui: UI) -> int | None:
 def cmd_setup(args, ctx, ui) -> int:
     ctx.require_root("Setting up Bant")
     port: int | str | None = args.ssh_port
+    if port is not None and str(port).strip().lower() != "random":
+        port = parse_port(port)  # reject a malformed --ssh-port before anything changes
     migrate = not args.no_ssh_migration
     if port is None and migrate and sys.stdin.isatty() and not getattr(args, "yes", False) and not getattr(args, "json", False) \
             and not TxManager(ctx).pending():
@@ -708,34 +751,60 @@ def cmd_setup(args, ctx, ui) -> int:
     return EX_OK if report["outcome"] in ("complete", "pending_confirmation") else EX_ERROR
 
 
+def render_uninstall_preview(ui: UI, pre: dict[str, Any], inv: list[dict[str, str]]) -> None:
+    ui.heading("UNINSTALL BANT")
+    ui.section("Safety checks")
+    for c in pre["checks"]:
+        state = "ok" if c["ok"] else ("warn" if c["ok"] is None else "bad")
+        ui.text(f" {ui.glyph(state)} {tr(c['check'])}: {tr(c['detail'])}", state, raw=True)
+    ui.section("What will happen")
+    ui.table(["Kind", "Item", "Action"], [[tr(i["kind"]), tr(i["item"], record=False), tr(i["action"])] for i in inv])
+    for w in pre["warnings"]:
+        ui.warn(w)
+    for b in pre["blockers"]:
+        ui.error(b)
+    ui.info(" Bant will NOT revert SSH to port 22, remove the working listener, stop Fail2ban, or touch rules it did not create.")
+
+
 def cmd_uninstall(args, ctx, ui) -> int:
     ctx.require_root("Uninstalling Bant")
-    inv = uninstall.inventory(ctx)
-    if not getattr(args, "json", False):
-        ui.heading("UNINSTALL BANT")
-        ui.table(["Kind", "Item", "Action"], [[tr(i["kind"]), i["item"], tr(i["action"])] for i in inv])
-        ui.info(" Bant will NOT revert SSH to port 22, remove the working listener, or uninstall Fail2ban.")
+    purge = args.purge
+    if not purge and not args.json and not args.yes and not args.dry_run and sys.stdin.isatty():
+        purge = ui.confirm("Also delete Bant's configuration, backups and logs (full removal)?", False)
+    pre = uninstall.preflight(ctx)
+    inv = uninstall.inventory(ctx, purge=purge, remove_f2b_config=args.remove_fail2ban_config, pre=pre)
+    if not args.json:
+        render_uninstall_preview(ui, pre, inv)
     if args.dry_run:
-        ctx.planned += [f"{tr(i['action'])}: {i['item']}" for i in inv]
-        _plan_footer(ctx, ui)
-        return EX_OK
+        data = {"dry_run": True, "plan": inv, "checks": pre["checks"], "warnings": pre["warnings"], "blockers": pre["blockers"]}
+        ctx.planned += [f"{tr(i['action'])}: {tr(i['item'], record=False)}" for i in inv]
+        emit(args, ui, data, lambda: _plan_footer(ctx, ui))
+        return EX_OK if not pre["blockers"] else EX_ERROR
+    if pre["blockers"]:
+        raise OperationFailed("Uninstall refused: " + " ".join(pre["blockers"]),
+                              hint="Nothing was changed. Resolve the item above and run the uninstall again.")
     if not _need_confirm(args, ui, "Proceed with uninstall?"):
         return EX_ERROR
-    purge = args.purge
-    if not purge and sys.stdin.isatty() and not args.yes:
-        purge = ui.confirm("Also delete backups, logs and Bant configuration?", False)
     res = uninstall.run(ctx, purge=purge, remove_f2b_config=args.remove_fail2ban_config)
-
-    def human() -> None:
-        for d in res["done"]:
-            ui.success(d)
-        for w in res["warnings"]:
-            ui.warn(w)
-        for k in res["kept"]:
-            ui.info(f" kept: {k}")
-        ui.info(" " + res["final"]["note"])
-    emit(args, ui, res, human)
+    emit(args, ui, res, lambda: render_uninstall_result(ui, res))
     return EX_OK
+
+
+def render_uninstall_result(ui: UI, res: dict[str, Any]) -> None:
+    ui.section("Result")
+    for d in res["done"]:
+        ui.success(d)
+    for w in res["warnings"]:
+        ui.warn(w)
+    for k in res["kept"]:
+        ui.info(f" kept: {k}")
+    f = res["final"]
+    ui.kv([("SSH port(s)", ", ".join(map(str, f["ssh_ports"])) or "-", "ok"),
+           ("SSH configuration", "valid" if f["ssh_valid"] else ("not installed" if f["ssh_valid"] is None else "INVALID"),
+            "ok" if f["ssh_valid"] is not False else "bad"),
+           ("Fail2ban", f["fail2ban"], None)])
+    ui.info(" " + f["note"])
+    ui.info(" Keep your current session open and test a NEW login before you log out.")
 
 
 def _print_update_info(ui: UI, info: dict[str, Any]) -> None:
@@ -832,6 +901,12 @@ def cmd_tx_finish(args, ctx, ui) -> int:
     return EX_OK
 
 
+def cmd_setup_state(args, ctx, ui) -> int:
+    """For install.sh: complete | pending_confirmation | incomplete | never."""
+    print(setup.initialized(ctx), file=ui.stream)
+    return EX_OK
+
+
 def cmd_fw_apply(args, ctx, ui) -> int:
     notes = firewall.reapply(ctx)
     n = bans.reapply_boot(ctx) if bans.available(ctx) else 0
@@ -864,6 +939,39 @@ def _startup_language(argv: Sequence[str], ctx: Context, stream) -> str:
     return code if code == "en" or stream_shows_cjk(stream) else "en"
 
 
+GLOBAL_DEFAULTS: dict[str, Any] = {"json": False, "dry_run": False, "yes": False, "no_color": False, "lang": None}
+
+
+def normalize_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Give every global option a value.
+
+    The global options are declared with default=SUPPRESS so that `bant --json status` and `bant status --json`
+    both work (a subparser default would otherwise overwrite the top-level value). The price is that an option
+    that was not given is *absent* from the namespace; this fills it in once, right after parsing.
+    """
+    for name, default in GLOBAL_DEFAULTS.items():
+        if not hasattr(args, name):
+            setattr(args, name, default)
+    return args
+
+
+def _debug_log(ctx: Context, exc: BaseException) -> str | None:
+    """Keep the traceback for developers without showing it to the user. Returns the log path, if written."""
+    import traceback
+
+    text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    try:
+        path = ctx.paths.log_dir / "debug.log"
+        if not ctx.is_root or not path.parent.is_dir():
+            return None
+        with open(path, "a", encoding="utf-8") as fh:
+            os.chmod(path, 0o600)
+            fh.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} bant {__version__} argv={sys.argv[1:]!r}\n{text}\n")
+        return str(path)
+    except OSError:
+        return None
+
+
 def main(argv: Sequence[str] | None = None, ctx: Context | None = None, ui: UI | None = None) -> int:
     argv_list = list(argv) if argv is not None else sys.argv[1:]
     ctx = ctx or Context(interactive=sys.stdin.isatty())
@@ -873,7 +981,8 @@ def main(argv: Sequence[str] | None = None, ctx: Context | None = None, ui: UI |
         args = parser.parse_args(argv_list)
     except SystemExit as exc:  # argparse exits 0 for --help/--version, 2 for usage errors
         return int(exc.code or 0) if isinstance(exc.code, int) else EX_USAGE
-    ui = ui or UI(color=False if getattr(args, "no_color", False) else None, assume_yes=getattr(args, "yes", False))
+    normalize_args(args)
+    ui = ui or UI(color=False if args.no_color else None, assume_yes=args.yes)
     if getattr(args, "dry_run", False):
         ctx.dry_run = True
     if getattr(args, "yes", False):
@@ -910,8 +1019,11 @@ def main(argv: Sequence[str] | None = None, ctx: Context | None = None, ui: UI |
     except Exception as exc:  # noqa: BLE001
         if os.environ.get("BANT_DEBUG"):
             raise
-        ui.error(f"Unexpected error: {type(exc).__name__}: {exc}")
-        ui.info("  Re-run with BANT_DEBUG=1 for a traceback, and check `bant doctor`.")
+        where = _debug_log(ctx, exc)
+        ui.error(f"Unexpected internal error ({type(exc).__name__}). Nothing further was changed by this step.")
+        if where:
+            ui.info(f"  Details for developers were saved to {where}.")
+        ui.info("  Check the server with `sudo bant doctor`. To see the full traceback, re-run with BANT_DEBUG=1.")
         return EX_ERROR
 
 
