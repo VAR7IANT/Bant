@@ -4,7 +4,7 @@ All notable changes to Bant are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [0.1.1] - Unreleased
+## [0.1.1] - 2026-10-31 (pre-release)
 
 ### Added
 - **Bilingual interface (English / 繁體中文).** The first time the menu is opened Bant asks for a language and remembers it
