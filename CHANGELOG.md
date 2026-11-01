@@ -4,7 +4,7 @@ All notable changes to Bant are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [0.1.2] - Unreleased (pre-release)
+## [0.1.2] - 2026-11-01 (pre-release)
 
 ### Fixed
 - **`sudo bant setup` crashed with `ValueError: empty range for randrange()`** on a VPS whose kernel
