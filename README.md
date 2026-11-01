@@ -58,7 +58,7 @@ switching, no clearing - so every result and error stays in your scrollback:
   ██████╔╝██║  ██║██║ ╚████║   ██║
   ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝
          Support by VAR7IANT
-               v0.1.2
+               v0.1.3
  Linux VPS Security Manager
  Security status  • Secure
  SSH port         48213
@@ -78,7 +78,7 @@ Select an option (Enter to exit):
 
 Type a number to open an entry; **Enter goes back** one level (on the main menu it exits). In a prompt
 that needs a value, Enter cancels; risky actions need an explicit `y` - Enter is never consent. The logo
-is shown only on a real terminal; narrow windows get a one-line `BANT v0.1.2 · Support by VAR7IANT`
+is shown only on a real terminal; narrow windows get a one-line `BANT v0.1.3 · Support by VAR7IANT`
 title, and pipes, scripts and `--json` get no banner at all.
 
 The same actions are available as commands (scripts written for 0.1.x keep working):

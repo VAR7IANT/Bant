@@ -4,10 +4,9 @@ All notable changes to Bant are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.3] - 2026-11-01 (pre-release)
 
 Interaction redesign: one output stream, one prompt rule, a short SSH confirmation, three languages.
-(No version number has been assigned; `bant version` still reports 0.1.2.)
 
 ### Changed
 - **The menu prints in place.** No alternate screen, no screen clearing, no "Press Enter to continue"
