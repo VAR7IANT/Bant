@@ -1,7 +1,7 @@
 """SSH status, authentication policy and the helpers shared with port migration.
 
 Authentication changes that could reduce access (password off, restricting root, pubkey off) run
-inside a rollback transaction and only become permanent after `bant ssh confirm` has verified a NEW
+inside a rollback transaction and only become permanent after `bant ssh cf` has verified a NEW
 authenticated session server-side. Safe changes are applied with an in-process revert on failure.
 """
 
@@ -321,7 +321,7 @@ def change_options(ctx: Context, changes: dict[str, str | None], *, label: str, 
             raise Unsupported("OpenSSH server is not installed.")
         if st.pending_tx:
             raise OperationFailed(f"SSH transaction {st.pending_tx} is still pending.",
-                                  hint="Run `bant ssh confirm` (or `bant ssh rollback`) first.")
+                                  hint="Run `bant ssh cf` (or `bant ssh rollback`) first.")
         if st.config_valid is False:
             raise OperationFailed(f"The current SSH configuration is invalid: {st.config_error}",
                                   hint="Fix it before changing settings (backup available via `bant restore`).")

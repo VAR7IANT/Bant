@@ -39,10 +39,31 @@ def render_pending(ui: UI, pend: dict[str, Any]) -> None:
             ("Auto-rollback in", fmt_left(pend["seconds_left"]), "warn" if pend["seconds_left"] > 120 else "bad")]
     ui.kv(rows)
     if pend.get("target"):
-        ui.text(f" Open a NEW terminal and log in on TCP {pend['target']}, then run: sudo bant ssh confirm", "warn")
+        ui.text(f" Reconnect on TCP {pend['target']} in a NEW terminal, then run there: sudo bant ssh cf", "warn")
     else:
-        ui.text(" Open a NEW session (using your key) and run: sudo bant ssh confirm", "warn")
+        ui.text(" Open a NEW session (using your key) and run there: sudo bant ssh cf", "warn")
     ui.text(" To undo now: sudo bant ssh rollback", "dim")
+
+
+def render_port_started(ui: UI, out: dict[str, Any], login: str, now: float) -> None:
+    """Result of `bant ssh port N`: short, in the order the user needs it, ending with the one next command."""
+    old = [p for p in out.get("old_ports", []) if p != out["target"]]
+    ui.text("")
+    ui.success(f"New SSH port: {out['target']}")
+    ui.success("New port is listening and answers as SSH")
+    ui.success(f"Firewall: {out['firewall']}")
+    if old:
+        ui.success(f"Old SSH port kept open for now: {', '.join(map(str, old))}")
+    ui.text("")
+    ui.text(" Reconnect to the server through the new port:", "title")
+    ui.text(f"   {login}", raw=True)
+    ui.text(" Once connected, run in that new session:", "title")
+    ui.text("   sudo bant ssh cf", raw=True)
+    ui.text("")
+    minutes = max(1, round((out["deadline"] - now) / 60)) if out.get("deadline") else None
+    if minutes:
+        ui.warn(f"Without confirmation the change is rolled back automatically at {fmt_ts(out['deadline'])} (in {minutes} min).")
+    ui.info(" If the new connection times out, allow the port in your VPS provider's firewall/security group too.")
 
 
 def render_status(ui: UI, d: dict[str, Any]) -> None:

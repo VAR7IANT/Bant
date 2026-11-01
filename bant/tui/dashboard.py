@@ -19,7 +19,10 @@ def draw(ctx: Context, ui: UI) -> dict:
     from bant import __version__
 
     d = status.collect(ctx)
-    ui.heading(f"BANT v{__version__}", "Linux VPS Security Manager")
+    if not ui._logo_shown:  # the block-letter logo already names the tool and its version
+        ui.heading(f"BANT v{__version__}", "Linux VPS Security Manager")
+    else:
+        ui.text(" Linux VPS Security Manager", "dim")
     ssh, f2b, fw = d["ssh"], d["fail2ban"], d["firewall"]
     pw, pws = yn(ssh["password_auth"])
     pw = {"yes": "on", "no": "off"}.get(pw, pw)
@@ -39,7 +42,10 @@ def draw(ctx: Context, ui: UI) -> dict:
     notices = []
     if ssh.get("pending"):
         p = ssh["pending"]
-        notices.append((f"SSH change pending: log in on port {p.get('target')} in a NEW terminal, then 3 -> Confirm.", "warn"))
+        if p.get("target"):
+            notices.append((f"SSH change pending: reconnect on port {p.get('target')}, then run: bant ssh cf", "warn"))
+        else:
+            notices.append(("SSH change pending: log in again with your key, then run: bant ssh cf", "warn"))
     elif d.get("setup") == "never" and d["privileged"]:
         notices.append(("Bant is installed, but security setup has not been run yet - choose 2.", "warn"))
     elif d.get("setup") == "incomplete" and d["privileged"]:

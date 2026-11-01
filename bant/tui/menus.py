@@ -31,12 +31,13 @@ from bant.presenters import (
     render_findings,
     render_firewall,
     render_logs,
+    render_port_started,
     render_ssh,
     render_status,
     render_updates,
     yn,
 )
-from bant.ui import UI, Abort, stream_shows_cjk
+from bant.ui import UI, Abort, Cancelled
 from bant.utils.validation import (
     format_duration,
     parse_duration,
@@ -83,40 +84,31 @@ def need_root(ctx: Context, ui: UI, what: str) -> bool:
 
 
 def submenu(ctx: Context, ui: UI, title: str, items: list[tuple[str, str, Action]], render: Callable[[], None] | None = None) -> None:
+    """Every menu below the main menu: status once on entry, then number -> action, Enter -> back.
+
+    Output is printed in place; after an action its result stays on screen and only the short option list is
+    printed again (never the whole screen), so nothing scrolls away and nothing is redrawn.
+    """
     table = {k: fn for k, _, fn in items}
+    if render:
+        try:
+            render()
+        except BantError as exc:
+            ui.error(exc.message)
+    else:
+        ui.heading(title)
+    ui.rule()
     while True:
-        ui.clear()
-        if render:
-            try:
-                render()
-            except BantError as exc:
-                ui.error(exc.message)
-        else:
-            ui.heading(title)
-        ui.rule()
-        ui.menu([(k, label) for k, label, _ in items] + [("0", "Back")])
-        ui.rule()
-        try:
-            choice = ui.ask("Select an option").lower()
-        except Abort:
+        ui.menu([(k, label) for k, label, _ in items])
+        choice = ui.select(table)
+        if choice is None:
             return
-        if choice in ("0", "b", "q", "back"):
-            return
-        if choice in ("", "r"):
-            continue
-        fn = table.get(choice)
-        if fn is None:
-            ui.warn(f"Unknown option '{choice}'.")
-            continue
-        guarded(fn)(ctx, ui)
-        try:
-            ui.pause()
-        except Abort:
-            return
+        guarded(table[choice])(ctx, ui)
+        ui.section(title)
 
 
 def _ask_ip(ui: UI, prompt: str, **kw) -> str:
-    return parse_ip(ui.ask(prompt), **kw)
+    return parse_ip(ui.ask_required(prompt), **kw)
 
 
 # ---------------------------------------------------------------------------
@@ -124,19 +116,16 @@ def _ask_ip(ui: UI, prompt: str, **kw) -> str:
 # ---------------------------------------------------------------------------
 
 def overview(ctx: Context, ui: UI) -> None:
-    ui.clear()
     render_status(ui, status.collect(ctx, deep=True))
 
 
 def audit(ctx: Context, ui: UI) -> None:
-    ui.clear()
     ui.info("Running audit checks...")
     findings = security_audit.run(ctx)
     render_findings(ui, findings, security_audit.summarize(findings), verbose=ui.confirm("Show informational findings too?", False))
 
 
 def system_info(ctx: Context, ui: UI) -> None:
-    ui.clear()
     d = status.collect(ctx)
     ui.heading("SYSTEM INFORMATION")
     ui.kv([("Bant version", __version__, None), ("OS", d["os"]["name"], None), ("Kernel", d["os"]["kernel"], None),
@@ -159,7 +148,8 @@ def ssh_view(ctx: Context, ui: UI) -> None:
 def ssh_port(ctx: Context, ui: UI) -> None:
     if not need_root(ctx, ui, "Changing the SSH port"):
         return
-    port, source = ports.resolve_target(ctx, ui.ask("New SSH port (a number, or 'random')", "random"))
+    ui.text(f" Current SSH port(s): {', '.join(map(str, ssh.status(ctx).active_ports)) or 'unknown'}")
+    port, source = ports.resolve_target(ctx, ui.ask_required("New SSH port (a number such as 667, or 'random')"))
     if source == "random":
         ui.info(f"Random free port chosen: {port}")
     p = migration.plan(ctx, port)
@@ -176,12 +166,10 @@ def ssh_port(ctx: Context, ui: UI) -> None:
         migration.begin(ctx, port)
         ui.success(f"SSH already on {port}; firewall and Fail2ban verified.")
         return
-    if not ui.confirm("Start the migration? (the old port stays open until you confirm)", True):
-        return
+    if not ui.confirm("Start the migration? (the old port stays open until you confirm)"):
+        raise Cancelled
     out = migration.begin(ctx, port)
-    ui.success(f"SSH now listens on {sorted(set(out['old_ports'] + [out['target']]))}. Firewall: {out['firewall']}")
-    ui.text(f"\n Open a NEW terminal and connect:  {migration.login_hint(ctx, port)}", "warn")
-    ui.text(" Then come back here (or any session) and choose 'Confirm pending change'.", "warn")
+    render_port_started(ui, out, migration.login_hint(ctx, port), ctx.clock())
 
 
 def ssh_password(ctx: Context, ui: UI) -> None:
@@ -191,13 +179,13 @@ def ssh_password(ctx: Context, ui: UI) -> None:
     ui.text(f" Password login is currently {'ENABLED' if st.password_auth else 'DISABLED'}.")
     if st.password_auth:
         ui.info(" Disabling requires a verified key-based login and runs with automatic rollback.")
-        if not ui.confirm("Disable password login?", False):
-            return
+        if not ui.confirm("Disable password login?"):
+            raise Cancelled
         res = ssh.set_password_auth(ctx, False)
     else:
         ui.info(" Enabling exposes the server to password guessing. Fail2ban should stay active.")
-        if not ui.confirm("Enable password login?", False):
-            return
+        if not ui.confirm("Enable password login?"):
+            raise Cancelled
         res = ssh.set_password_auth(ctx, True)
     ui.success(res["message"])
     for w in res.get("warnings", []):
@@ -210,10 +198,10 @@ def ssh_root(ctx: Context, ui: UI) -> None:
     st = ssh.status(ctx)
     ui.text(f" Current: {st.root_login} - {st.root_label}")
     ui.info(f" {st.root_detail}")
-    ui.menu([("1", "yes (password or key)"), ("2", "prohibit-password (key only)"), ("3", "no (disabled)"), ("0", "cancel")])
-    pick = {"1": "yes", "2": "prohibit-password", "3": "no"}.get(ui.ask("Choose"))
+    ui.menu([("1", "yes (password or key)"), ("2", "prohibit-password (key only)"), ("3", "no (disabled)")])
+    pick = {"1": "yes", "2": "prohibit-password", "3": "no"}.get(ui.select(["1", "2", "3"]) or "")
     if not pick:
-        return
+        raise Cancelled
     if need_root(ctx, ui, "Changing the root login policy"):
         res = ssh.set_option(ctx, "root-login", pick)
         ui.success(res["message"])
@@ -235,13 +223,28 @@ def ssh_limits(ctx: Context, ui: UI) -> None:
 
 
 def ssh_confirm(ctx: Context, ui: UI) -> None:
-    if need_root(ctx, ui, "Confirming a change"):
-        out = migration.confirm(ctx)
-        ui.success(f"Confirmed: {out['verified']}")
+    """Same rules as `bant ssh cf`: this session must be the new connection; a console needs explicit consent."""
+    if not need_root(ctx, ui, "Confirming a change"):
+        return
+    try:
+        out = migration.confirm(ctx, "current")
+    except migration.NotInSshSession as exc:
+        ui.warn(exc.message)
+        _tx, evidence = migration.check(ctx, "other")
+        ui.text(" Bant found this separate new session instead:")
+        ui.text(f"   {evidence}", raw=True)
+        if not ui.confirm("Is that session yours, and does it work? Confirm the change with it"):
+            raise Cancelled from None
+        out = migration.confirm(ctx, "other")
+    ui.success(f"Confirmed: {out['verified']}")
+    if out.get("kind") == "ssh-port":
+        ui.success(f"SSH now listens only on TCP {out['port']}; old listener(s) {out['removed_ports']} removed; rollback timer disarmed.")
+    for n in out.get("notes", []):
+        ui.info(" " + n)
 
 
 def ssh_rollback(ctx: Context, ui: UI) -> None:
-    if need_root(ctx, ui, "Rolling back") and ui.confirm("Roll back the pending SSH change now?", True):
+    if need_root(ctx, ui, "Rolling back") and ui.confirm("Roll back the pending SSH change now?"):
         out = migration.abort(ctx)
         ui.success(f"Rolled back {out['rolled_back']}.")
 
@@ -303,14 +306,17 @@ def f2b_ban(ctx: Context, ui: UI) -> None:
     risk = bans.ban_risk(ctx, ip)
     if risk:
         ui.warn(f"This may lock you out: {risk}")
-        if not ui.confirm("Ban it anyway?", False):
-            return
-    kind = ui.ask("Duration: [j]ail default / [d]uration / [p]ermanent", "j").lower()
-    if kind.startswith("p"):
+        if not ui.confirm("Ban it anyway?"):
+            raise Cancelled
+    ui.menu([("1", "Fail2ban jail default"), ("2", "Custom duration"), ("3", "Permanent")])
+    kind = ui.select(["1", "2", "3"])
+    if kind is None:
+        raise Cancelled
+    if kind == "3":
         bans.block(ctx, ip, reason="manual (tui)")
         ui.success(f"{ip} blocked permanently in Bant's nftables table.")
-    elif kind.startswith("d"):
-        secs = parse_duration(ui.ask("Duration (e.g. 12h, 7d)"))
+    elif kind == "2":
+        secs = parse_duration(ui.ask_required("Duration (e.g. 12h, 7d)"))
         bans.block(ctx, ip, duration=secs, reason="manual (tui)")
         ui.success(f"{ip} blocked for {format_duration(secs)}.")
     else:
@@ -335,7 +341,7 @@ def f2b_unban(ctx: Context, ui: UI) -> None:
 def f2b_set(key: str, prompt: str) -> Action:
     def run(ctx: Context, ui: UI) -> None:
         if need_root(ctx, ui, "Changing Fail2ban settings"):
-            ui.success(fail2ban.set_option(ctx, key, ui.ask(prompt)))
+            ui.success(fail2ban.set_option(ctx, key, ui.ask_required(prompt)))
     return run
 
 
@@ -347,8 +353,8 @@ def f2b_trusted(ctx: Context, ui: UI) -> None:
     if act.startswith(("a", "r")) and need_root(ctx, ui, "Changing trusted addresses"):
         ip = _ask_ip(ui, "Address or CIDR", allow_network=True)
         if act.startswith("a"):
-            if not ui.confirm(f"Trust {ip}? Dynamic IPs may later belong to someone else.", False):
-                return
+            if not ui.confirm(f"Trust {ip}? Dynamic IPs may later belong to someone else."):
+                raise Cancelled
             bans.trust_add(ctx, ip)
         else:
             bans.trust_remove(ctx, ip)
@@ -369,8 +375,9 @@ def f2b_toggle(ctx: Context, ui: UI) -> None:
         return
     ov = fail2ban.overview(ctx)
     if ov.service == "active":
-        if ui.confirm("Disable Fail2ban? SSH brute-force protection will be OFF.", False):
-            ui.warn(fail2ban.set_enabled(ctx, False))
+        if not ui.confirm("Disable Fail2ban? SSH brute-force protection will be OFF."):
+            raise Cancelled
+        ui.warn(fail2ban.set_enabled(ctx, False))
     else:
         ui.success(fail2ban.set_enabled(ctx, True))
 
@@ -383,8 +390,8 @@ def f2b_conflicts(ctx: Context, ui: UI) -> None:
     render_f2b_conflicts(ui, items, fc.adopt_plan(ctx, items))
     if not items or not ctx.is_root:
         return
-    ui.menu([("1", "Keep the administrator's settings (no file changes)"), ("2", "Let Bant take over (backup, then comment out)"), ("0", "Back")])
-    choice = ui.ask("Select an option", "0")
+    ui.menu([("1", "Keep the administrator's settings (no file changes)"), ("2", "Let Bant take over (backup, then comment out)")])
+    choice = ui.select(["1", "2"])
     if choice == "1":
         ui.success(fc.resolve(ctx, "keep")["message"])
     elif choice == "2" and ui.confirm("Let Bant take over these settings?", False):
@@ -430,7 +437,7 @@ def fw_view(ctx: Context, ui: UI) -> None:
 def fw_allow(ctx: Context, ui: UI) -> None:
     if not need_root(ctx, ui, "Changing firewall rules"):
         return
-    port, proto = parse_port(ui.ask("Port")), parse_proto(ui.ask("Protocol", "tcp"))
+    port, proto = _ask_port_proto(ui, "Port to allow (e.g. 8080 or 8080/udp)")
     with ctx.lock():
         res = firewall.allow_port(ctx, port, proto, purpose="manual")
         firewall.commit_rules(ctx, res.rules)
@@ -441,12 +448,20 @@ def fw_allow(ctx: Context, ui: UI) -> None:
 def fw_remove(ctx: Context, ui: UI) -> None:
     if not need_root(ctx, ui, "Changing firewall rules"):
         return
-    port, proto = parse_port(ui.ask("Port of a Bant-managed allowance")), parse_proto(ui.ask("Protocol", "tcp"))
-    if port in ssh.status(ctx).active_ports and not ui.confirm("This is your SSH port - removing it may lock you out. Continue?", False):
-        return
+    port, proto = _ask_port_proto(ui, "Port of a Bant-managed allowance (e.g. 8080 or 8080/udp)")
+    if port in ssh.status(ctx).active_ports and not ui.confirm("This is your SSH port - removing it may lock you out. Continue?"):
+        raise Cancelled
+    if not ui.confirm(f"Remove Bant's firewall allowance for {port}/{proto}?"):
+        raise Cancelled
     with ctx.lock():
         for line in firewall.remove_port(ctx, port, proto):
             ui.success(line)
+
+
+def _ask_port_proto(ui: UI, prompt: str) -> tuple[int, str]:
+    raw = ui.ask_required(prompt).strip().lower()
+    port, _, proto = raw.partition("/")
+    return parse_port(port), parse_proto(proto or "tcp")
 
 
 def fw_menu(ctx: Context, ui: UI) -> None:
@@ -502,7 +517,8 @@ def settings_show(ctx: Context, ui: UI) -> None:
 
 def settings_rollback(ctx: Context, ui: UI) -> None:
     if need_root(ctx, ui, "Changing settings"):
-        minutes = parse_int_range(ui.ask("Rollback window in minutes (1-1440)", str(ctx.config.rollback_minutes)), 1, 1440, "minutes")
+        ui.text(f" Current rollback window: {ctx.config.rollback_minutes} min")
+        minutes = parse_int_range(ui.ask_required("Rollback window in minutes (1-1440)"), 1, 1440, "minutes")
         ctx.config.set("ssh", "rollback_minutes", minutes)
         ctx.config.save()
         ctx.audit("config.set", key="ssh.rollback_minutes", value=minutes)
@@ -511,7 +527,7 @@ def settings_rollback(ctx: Context, ui: UI) -> None:
 
 def settings_findtime(ctx: Context, ui: UI) -> None:
     if need_root(ctx, ui, "Changing settings"):
-        ui.success(fail2ban.set_option(ctx, "findtime", ui.ask("Detection window (e.g. 10m)")))
+        ui.success(fail2ban.set_option(ctx, "findtime", ui.ask_required("Detection window (e.g. 10m)")))
 
 
 def settings_menu(ctx: Context, ui: UI) -> None:
@@ -523,7 +539,7 @@ def settings_menu(ctx: Context, ui: UI) -> None:
 
 def bk_create(ctx: Context, ui: UI) -> None:
     if need_root(ctx, ui, "Creating a backup"):
-        r = backups.create(ctx, ui.ask("Note", "manual (tui)"))
+        r = backups.create(ctx, ui.ask_required("Backup note (e.g. before-upgrade)"))
         ui.success(f"Backup {r['id']} created ({r['files']} files).")
 
 
@@ -535,8 +551,8 @@ def bk_restore(ctx: Context, ui: UI) -> None:
     if not need_root(ctx, ui, "Restoring a backup"):
         return
     bk_list(ctx, ui)
-    bid = ui.ask("Backup ID to restore", "latest")
-    if ui.confirm(f"Restore '{bid}'? A safety snapshot is taken first.", False):
+    bid = ui.ask_required("Backup ID to restore (or 'latest')")
+    if ui.confirm(f"Restore '{bid}'? A safety snapshot is taken first."):
         r = backups.restore(ctx, bid)
         ui.success(f"Restored {r['id']}; safety snapshot {r['safety_backup']}.")
 
@@ -565,37 +581,37 @@ def backup_menu(ctx: Context, ui: UI) -> None:
 # Language
 # ---------------------------------------------------------------------------
 
-_LANG_ANSWERS = {"1": "en", "en": "en", "english": "en", "2": "zh", "zh": "zh", "中文": "zh", "繁體中文": "zh", "繁体中文": "zh", "chinese": "zh"}
+LANG_CHOICES = [("1", "zh-CN"), ("2", "zh-TW"), ("3", "en")]
 
 
 def choose_language(ctx: Context, ui: UI, *, first_run: bool = False) -> None:
-    """Bilingual language picker. Shown on the first launch of the menu and from the Language menu entry."""
-    hint = i18n.locale_hint()
-    default = "2" if hint == "zh" else "1"
-    ui.clear()
-    ui.heading("BANT", "Select language / 選擇語言")
-    ui.menu([("1", "English"), ("2", "繁體中文 (Traditional Chinese)")])
-    while True:
-        answer = ui.ask("Language / 語言 (1/2)", default, translate=False).strip().lower()
-        code = _LANG_ANSWERS.get(answer)
-        if code:
-            break
-        ui.text("Please enter 1 or 2 / 請輸入 1 或 2", "warn", raw=True)
-    if code == "zh" and not stream_shows_cjk(ui.stream):
-        i18n.set_language("en")
+    """Language picker (main menu entry, `bant lang`, and the very first start).
+
+    The three options are always shown in their own script, so anyone can find theirs. Enter goes back and keeps
+    the current language (on the very first start: the language of the system locale, or English).
+    """
+    current = i18n.resolve(ctx)[0]
+    ui.section("Select language")
+    for k, c in LANG_CHOICES:  # native names, never translated
+        ui.text(f" {k:>2}. {i18n.LANGS[c]}  ({c})", raw=True)
+    if current and not first_run:
+        ui.info(f" Current: {i18n.LANGS[current]} ({current})")
+    pick = ui.select([k for k, _ in LANG_CHOICES] + [c.lower() for _, c in LANG_CHOICES])
+    if pick is None and not first_run:
+        return
+    code = i18n.normalize(dict(LANG_CHOICES).get(pick or "", pick or "")) or i18n.locale_hint() or i18n.DEFAULT
+    shown = i18n.apply(code, ui.stream)
+    if shown != code:
         ui.warn("This terminal does not look UTF-8, so Chinese would be garbled; showing English. "
                 "Use a UTF-8 terminal (e.g. LANG=C.UTF-8) and choose again from the Language menu.")
         return
-    i18n.set_language(code)
     try:
         where = i18n.save(ctx, code)
-        ui.success("Language set to English." if code == "en" else "語言已設定為繁體中文。")
+        ui.success(f"Language set to {i18n.LANGS[code]}.")
         if where == "user":
             ui.info("Saved as your personal preference (run with sudo to set it system-wide).")
     except OSError as exc:
         ui.warn(f"Could not save the language choice ({exc}); it applies to this session only.")
-    if first_run:
-        ui.pause()
 
 
 def language_menu(ctx: Context, ui: UI) -> None:
@@ -619,7 +635,7 @@ def su_apply(ctx: Context, ui: UI) -> None:
     from bant.presenters import render_update_info
 
     render_update_info(ui, info)
-    if not info["available"] or not ui.confirm(f"Install Bant {info['latest']} now?", True):
+    if not info["available"] or not ui.confirm(f"Install Bant {info['latest']} now?"):
         return
     res = updater.apply(ctx)
     ui.success(f"Updated Bant {res['previous']} -> {res['current']} ({res['verified']}).")
@@ -628,7 +644,7 @@ def su_apply(ctx: Context, ui: UI) -> None:
 
 
 def su_rollback(ctx: Context, ui: UI) -> None:
-    if need_root(ctx, ui, "Rolling back Bant") and ui.confirm("Switch back to the previous Bant version?", True):
+    if need_root(ctx, ui, "Rolling back Bant") and ui.confirm("Switch back to the previous Bant version?"):
         res = updater.rollback(ctx)
         ui.success(f"Bant is now {res['to']} (was {res['from']}). Quit and start `bant` again.")
 
@@ -642,7 +658,7 @@ def su_notify(ctx: Context, ui: UI) -> None:
 def su_channel(ctx: Context, ui: UI) -> None:
     if need_root(ctx, ui, "Changing the update channel"):
         ui.text(f" Current channel: {updater.channel(ctx)}  (auto = include pre-releases while Bant is below 1.0)")
-        ui.success(updater.set_channel(ctx, ui.ask("Channel (auto / stable / prerelease)", updater.channel(ctx))))
+        ui.success(updater.set_channel(ctx, ui.ask_required("Channel (auto / stable / prerelease)")))
 
 
 def selfupdate_menu(ctx: Context, ui: UI) -> None:
@@ -684,7 +700,6 @@ def protect(ctx: Context, ui: UI) -> None:
     from bant.core.rollback import TxManager
     from bant.presenters import render_setup
 
-    ui.clear()
     ui.heading("ONE-CLICK PROTECTION")
     if not need_root(ctx, ui, "One-click protection"):
         return
@@ -699,11 +714,11 @@ def protect(ctx: Context, ui: UI) -> None:
     ui.info(" Password login is not changed. Anything already set up is reported as 'already enabled' and not repeated.")
     if state == "complete":
         ui.success("Security setup was already completed on this server; running it again only re-checks.")
-    if not ui.confirm("Start now?", True):
-        return
+    if not ui.confirm("Start now?"):
+        raise Cancelled
     port = None
     if not TxManager(ctx).pending():
-        port = _ask_ssh_port(ctx, ui)
+        port = _ask_ssh_port(ctx, ui, enter_cancels=True)
     report = setup.run(ctx, port=port)
     render_setup(ui, report)
 
@@ -718,9 +733,8 @@ def maintenance_menu(ctx: Context, ui: UI) -> None:
     submenu(ctx, ui, "MAINTENANCE & SETTINGS", [
         ("1", "Update Bant", selfupdate_menu), ("2", "System security updates", updates_menu),
         ("3", "Backup & restore", backup_menu), ("4", "Security logs", logs_menu),
-        ("5", "Repair configuration", bk_repair), ("6", "Language / 語言", language_menu),
-        ("7", "Version information", version_info), ("8", "Advanced diagnostics", full_diagnostics),
-        ("9", "Rollback window", settings_rollback),
+        ("5", "Repair configuration", bk_repair), ("6", "Version information", version_info),
+        ("7", "Advanced diagnostics", full_diagnostics), ("8", "Rollback window", settings_rollback),
     ])
 
 
@@ -737,14 +751,14 @@ def _uninstall(ctx: Context, ui: UI, *, purge: bool, preview: bool) -> None:
             ui.error("Uninstall is not possible right now - nothing was changed.")
         return
     question = ("Remove Bant AND delete its configuration, backups and logs?" if purge else "Remove Bant (configuration and backups are kept)?")
-    if not ui.confirm(question, False):
-        return
-    if purge and ui.ask("Type 'delete' to confirm the full removal", translate=True).strip().lower() not in ("delete", "刪除"):
+    if not ui.confirm(question):
+        raise Cancelled
+    if purge and ui.ask("Type 'delete' to confirm the full removal", translate=True).strip().lower() not in ("delete", "刪除", "删除"):
         ui.warn("Cancelled.")
         return
     res = uninstall.run(ctx, purge=purge)
     render_uninstall_result(ui, res)
-    ui.warn("Bant has been removed. This menu closes when you press Enter.")
+    ui.warn("Bant has been removed. The menu is closed.")
     raise UninstallDone
 
 

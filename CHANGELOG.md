@@ -4,6 +4,44 @@ All notable changes to Bant are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Interaction redesign: one output stream, one prompt rule, a short SSH confirmation, three languages.
+(No version number has been assigned; `bant version` still reports 0.1.2.)
+
+### Changed
+- **The menu prints in place.** No alternate screen, no screen clearing, no "Press Enter to continue"
+  pauses: results and errors stay in the terminal's scrollback and can be copied. After an action only the
+  short option list is printed again; an invalid answer is reported and asked again without a redraw.
+- **Enter goes back everywhere.** Every menu uses one prompt (`Select an option (Enter to go back)`;
+  main menu: `(Enter to exit)`). `0`/`q` still work. In prompts that need a value (port, IP, duration,
+  backup id, ...) Enter cancels instead of silently using a default (the SSH port prompt used to mean
+  "random" on Enter). Yes/no questions in the menu treat Enter as "no", so uninstall, disabling Fail2ban or
+  password login, firewall removals, port migration and restores need an explicit `y`.
+- **Shorter SSH port result.** `bant ssh port 667` ends with four check lines (new port, listening,
+  firewall, old port kept), the reconnect command, `sudo bant ssh cf`, and the automatic-rollback time.
+- Main menu: **6 Language** (new), 7 Safe uninstall (was 6). The language entry moved out of
+  Maintenance & settings, whose items 6-8 shifted up by one.
+- Main menu, `bant version` and interactive `bant --help` show the **BANT block-letter logo** in Rout's
+  design language (same letterforms, blue gradient, credit and version), once per session and only on a
+  real terminal; narrow/short windows and non-UTF-8 terminals get a one-line title, pipes/`--json` none.
+
+### Added
+- **`bant ssh cf`** confirms the pending SSH change from the new connection. It finds the single pending
+  transaction itself (nothing to copy), and verifies on the server - process tree and kernel socket
+  table, never `SSH_CONNECTION` - that the session running it arrived through the new port after the
+  change, from a non-local peer (and, for "password off", with a key). It refuses with a recovery hint
+  when nothing is pending, when the deadline has passed, when several changes are pending, or when run
+  from the old session. Persistent transactions, the rollback timer and finalisation are unchanged.
+- `bant ssh cf --other-session` for provider consoles: shows a separate verified new session and asks
+  before using it as proof (Enter = no; non-interactive needs `--yes`).
+- **简体中文 (`zh-CN`)** alongside 繁體中文 (`zh-TW`) and English. `bant lang` opens a picker on a
+  terminal; `bant lang zh-CN|zh-TW|en` (also `zh_cn`, `zh-Hans`, ...) switches immediately and persists.
+  First start follows the system locale. The saved value `zh` from 0.1.2 keeps meaning Traditional Chinese.
+
+### Kept for compatibility
+- `bant ssh confirm` (0.1.2 semantics) and `--lang zh` still work.
+
 ## [0.1.2] - 2026-11-01 (pre-release)
 
 ### Fixed

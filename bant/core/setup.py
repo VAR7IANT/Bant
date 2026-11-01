@@ -3,7 +3,7 @@
 Order of operations: environment check -> baseline files -> backup -> Fail2ban (for the *current* SSH
 ports) -> firewall detection -> SSH port migration to a random free port or the port you choose
 (dual listener, rollback armed) -> verification summary. The migration is never finalised here: that
-needs a verified new connection (`bant ssh confirm`). Password login is never changed here.
+needs a verified new connection (`bant ssh cf`). Password login is never changed here.
 
 Every step is independent: a failure is recorded with its reason and the remaining steps still run
 where that is safe. Running setup again resumes: finished steps report "already enabled" and are not
@@ -169,7 +169,7 @@ def run(ctx: Context, *, migrate: bool = True, with_fail2ban: bool = True, port:
             steps.append(_step(ctx, "ssh-migration", "skipped", "OpenSSH server not installed"))
         elif pend:
             tx = pend[-1]
-            steps.append(_step(ctx, "ssh-migration", "pending", f"transaction {tx.id} awaits `bant ssh confirm`"))
+            steps.append(_step(ctx, "ssh-migration", "pending", f"transaction {tx.id} awaits `bant ssh cf`"))
         elif migrate and port_error is not None:
             steps.append(_step(ctx, "ssh-migration", "failed", port_error.message))
             next_steps.append(port_error.hint or "Choose an SSH port yourself: `sudo bant ssh port <PORT>`.")
@@ -218,7 +218,7 @@ def run(ctx: Context, *, migrate: bool = True, with_fail2ban: bool = True, port:
             if d and d.get("target"):
                 next_steps.insert(0, f"FIRST allow inbound TCP {d['target']} in your VPS provider's firewall / security group, if it has one.")
                 next_steps.insert(1, f"Open a NEW terminal and connect: {migration.login_hint(ctx, d['target'])}")
-                next_steps.insert(2, "Then run `sudo bant ssh confirm` within the deadline (`sudo bant ssh extend` adds time).")
+                next_steps.insert(2, "In that new session run `sudo bant ssh cf` within the deadline (`sudo bant ssh extend` adds time).")
         elif failed or not any(s["step"] == "ssh-migration" and s["status"] in ("done", "already") for s in steps) and migrate and st.installed:
             outcome = "incomplete"
         else:

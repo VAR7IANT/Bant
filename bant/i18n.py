@@ -1,9 +1,9 @@
-"""Interface language: English (source text) and Traditional Chinese.
+"""Interface language: English (source text), Simplified Chinese (zh-CN) and Traditional Chinese (zh-TW).
 
 Design: the program's messages stay plain English strings / f-strings. They are translated at the
 *output boundary* (UI methods, error printing) by `tr()`:
 
-  1. exact lookup in the catalog (bant/locales/zh_tw.py);
+  1. exact lookup in the active language's catalog (bant/locales/zh_cn.py or zh_tw.py);
   2. otherwise the catalog's templates (keys containing `{name}` placeholders) are matched against the
      already-formatted text, the captured values are translated recursively, and substituted into the
      Chinese template;
@@ -21,14 +21,30 @@ import string
 from dataclasses import dataclass
 from pathlib import Path
 
-LANGS = {"en": "English", "zh": "繁體中文"}
-DEFAULT = "en"
+LANGS = {"zh-CN": "简体中文", "zh-TW": "繁體中文", "en": "English"}
+DEFAULT = "en"  # used when neither a saved choice nor the system locale names a supported language
+LEGACY = {"zh": "zh-TW"}  # Bant <= 0.1.2 had a single Chinese option, which was Traditional Chinese
+_ALIASES = {
+    "en": "en", "english": "en", "en-us": "en", "en-gb": "en",
+    "zh-cn": "zh-CN", "zh-hans": "zh-CN", "zh-sg": "zh-CN", "zh-hans-cn": "zh-CN", "cn": "zh-CN", "简体中文": "zh-CN", "简体": "zh-CN",
+    "zh-tw": "zh-TW", "zh-hant": "zh-TW", "zh-hk": "zh-TW", "zh-mo": "zh-TW", "zh-hant-tw": "zh-TW", "tw": "zh-TW",
+    "繁體中文": "zh-TW", "繁體": "zh-TW", "繁体中文": "zh-TW",
+    "zh": "zh-TW",
+}
+
+
+def normalize(value: str | None) -> str | None:
+    """'zh_CN.UTF-8', 'zh-cn', 'zh-Hans' -> 'zh-CN'; legacy 'zh' -> 'zh-TW'; None if not a supported language."""
+    if not value:
+        return None
+    v = str(value).strip().split(".")[0].split("@")[0].replace("_", "-").lower()
+    return _ALIASES.get(v)
 
 _COMMANDISH = re.compile(r"^(sudo|chmod|apt|apt-get|systemctl|journalctl|ssh|git)\s")
 _CJK = re.compile(r"[\u3000-\u9fff\uff00-\uffef]")
 _lang = DEFAULT
 _recording: set[str] | None = None
-_compiled: tuple[dict[str, str], list[_Template]] | None = None
+_compiled: dict[str, tuple[dict[str, str], list[_Template]]] = {}
 _cache: dict[str, str] = {}
 
 
@@ -44,8 +60,27 @@ class _Template:
 
 def set_language(code: str) -> None:
     global _lang
-    _lang = code if code in LANGS else DEFAULT
+    _lang = normalize(code) or DEFAULT
     _cache.clear()
+
+
+def apply(code: str, stream) -> str:
+    """Switch the live language for output on `stream`; Chinese falls back to English on a non-UTF-8 terminal."""
+    from bant.ui import stream_shows_cjk
+
+    code = normalize(code) or DEFAULT
+    set_language(code if code == "en" or stream_shows_cjk(stream) else "en")
+    return _lang
+
+
+def catalog(code: str | None = None) -> dict[str, str]:
+    """The message catalog of a Chinese language (English needs none)."""
+    code = normalize(code) or _lang
+    if code == "zh-CN":
+        from bant.locales.zh_cn import ZH as CN
+        return CN
+    from bant.locales.zh_tw import ZH as TW
+    return TW
 
 
 def language() -> str:
@@ -64,11 +99,10 @@ def stop_recording() -> set[str]:
 
 
 def _load() -> tuple[dict[str, str], list[_Template]]:
-    global _compiled
-    if _compiled is not None:
-        return _compiled
-    from bant.locales.zh_tw import ZH
-
+    hit = _compiled.get(_lang)
+    if hit is not None:
+        return hit
+    ZH = catalog(_lang)
     exact: dict[str, str] = {}
     templates: list[_Template] = []
     fmt = string.Formatter()
@@ -87,8 +121,8 @@ def _load() -> tuple[dict[str, str], list[_Template]]:
         templates.append(_Template(re.compile(f"^{pattern}" + ("" if is_prefix else "$"), re.S), names, zh, anchor,
                                    sum(len(x) for x in literals), is_prefix))
     templates.sort(key=lambda t: -t.weight)
-    _compiled = (exact, templates)
-    return _compiled
+    _compiled[_lang] = (exact, templates)
+    return _compiled[_lang]
 
 
 def tr(text: object, *, _depth: int = 0, record: bool = True) -> str:
@@ -116,6 +150,13 @@ def _lookup(s: str, exact: dict[str, str], templates: list[_Template], depth: in
     if stripped != s and stripped in exact:  # tolerate padding/indentation added by callers
         lead, trail = s[: len(s) - len(s.lstrip())], s[len(s.rstrip()):]
         return lead + exact[stripped] + trail
+    if "\n" in stripped and depth == 0:
+        # A multi-line message is translated line by line first: otherwise the last placeholder of a
+        # template that matches the first line would swallow every following line as its "value".
+        lines = s.split("\n")
+        done = [_translate_piece(line, depth) for line in lines]
+        if all(a != b for a, b in zip(lines, done, strict=True) if a.strip() and re.search(r"[A-Za-z]{3,}", a)):
+            return "\n".join(done)
     for t in templates:
         if t.anchor and t.anchor not in s:
             continue
@@ -189,11 +230,12 @@ def _translate_piece(piece: str, depth: int) -> str:
 # ---------------------------------------------------------------------------
 
 def locale_hint(env: dict[str, str] | None = None) -> str | None:
+    """The language the system locale asks for: zh_CN/zh_SG/zh_Hans -> zh-CN, zh_TW/zh_HK/zh_MO/zh_Hant -> zh-TW."""
     env = os.environ if env is None else env
     for var in ("LC_ALL", "LC_MESSAGES", "LANGUAGE", "LANG"):
-        val = (env.get(var) or "").lower()
+        val = (env.get(var) or "").split(":")[0].split(".")[0].replace("_", "-").lower()
         if val.startswith("zh"):
-            return "zh"
+            return "zh-TW" if any(t in val for t in ("-tw", "-hk", "-mo", "hant")) else "zh-CN"
         if val.startswith("en"):
             return "en"
     return None
@@ -209,8 +251,8 @@ def read_user_pref(home_candidates: list[Path]) -> str | None:
             code = path.read_text().strip()
         except OSError:
             continue
-        if code in LANGS:
-            return code
+        if normalize(code):
+            return normalize(code)
     return None
 
 
@@ -226,22 +268,23 @@ def resolve(ctx, explicit: str | None = None) -> tuple[str | None, str]:
 
     Order: explicit flag/env -> personal preference file -> system config -> (None).
     """
-    if explicit in LANGS:
-        return explicit, "flag"
-    env = os.environ.get("BANT_LANG", "").strip().lower()
-    if env in LANGS:
+    if normalize(explicit):
+        return normalize(explicit), "flag"
+    env = normalize(os.environ.get("BANT_LANG", ""))
+    if env:
         return env, "environment"
     pref = read_user_pref(ctx.user_homes())
     if pref:
         return pref, "user"
-    cfg = str(ctx.config.data.get("general", {}).get("language", ""))
-    if cfg in LANGS:
+    cfg = normalize(str(ctx.config.data.get("general", {}).get("language", "")))
+    if cfg:
         return cfg, "system"
     return None, "unset"
 
 
 def save(ctx, code: str) -> str:
     """Persist the choice: system-wide for root, otherwise a personal preference. Returns where."""
+    code = normalize(code) or ""
     if code not in LANGS:
         raise ValueError(code)
     if ctx.is_root:

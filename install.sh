@@ -7,7 +7,7 @@
 #   * installs/configures Fail2ban for SSH,
 #   * starts a SAFE migration of SSH to a RANDOM free port (or the port you choose); the old port stays
 #     open and an automatic rollback is armed,
-#   * leaves the final switch to you: log in on the new port, then run `sudo bant ssh confirm`.
+#   * leaves the final switch to you: log in on the new port, then run `sudo bant ssh cf`.
 #
 # Re-running it upgrades the program and keeps everything else: SSH port, password policy, Fail2ban,
 # firewall rules, backups and state. A finished setup is not repeated; an unfinished one is offered again.
@@ -188,7 +188,7 @@ elif [ "$RUN_SETUP" -eq 0 ]; then
   log "Run it when you are ready: sudo bant setup   (or: sudo bant -> 2. One-click protection)"
 elif [ "$SETUP_STATE" = "pending_confirmation" ]; then
   log "An SSH change from an earlier run is waiting for confirmation; setup is not repeated now."
-  log "Log in on the new port in a NEW terminal, then run: sudo bant ssh confirm   (status: sudo bant ssh status)"
+  log "Log in on the new port in a NEW terminal, then run: sudo bant ssh cf   (status: sudo bant ssh status)"
 elif [ "$SETUP_STATE" = "complete" ] && [ "$EXPLICIT_SETUP" -eq 0 ]; then
   log "Security setup was already completed on this server: SSH port, password policy, Fail2ban and firewall are kept as they are."
   log "Re-check at any time with: sudo bant doctor   (or re-run: sudo bant setup)"

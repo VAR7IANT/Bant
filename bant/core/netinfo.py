@@ -233,10 +233,15 @@ def _ppid(ctx: Context, pid: int) -> int:
         return 0
 
 
+def self_pid() -> int:
+    """This process (a seam for tests, which run the code outside any real SSH session)."""
+    return os.getpid()
+
+
 def current_session(ctx: Context, start_pid: int | None = None) -> SshSession | None:
     """The SSH session this process descends from, determined via the process tree."""
     by_pid = {s.pid: s for s in ssh_sessions(ctx)}
-    pid = start_pid or os.getpid()
+    pid = start_pid or self_pid()
     for _ in range(64):
         if pid in by_pid:
             return by_pid[pid]

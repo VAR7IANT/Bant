@@ -319,7 +319,7 @@ def test_uninstall_refuses_pending_migration_and_changes_nothing(host):
     setup.run(host.make_ctx(), port=667)
     _program(host)
     dropin = host.paths.ssh_dropin.read_text()
-    with pytest.raises(OperationFailed, match="ssh confirm"):
+    with pytest.raises(OperationFailed, match="ssh cf"):
         uninstall.run(host.make_ctx())
     assert host.paths.ssh_dropin.read_text() == dropin and host.paths.launcher.exists()
     assert TxManager(host.make_ctx()).pending(), "the pending migration is neither completed nor destroyed"
@@ -609,7 +609,7 @@ def test_setup_dry_run_previews_without_writing(host):
 def test_main_menu_uninstall_entry_uses_the_same_core(host):
     from bant.tui.app import run_tui
     _confirmed(host)
-    answers = iter(["6", "1", "y", "", "", "0"])
+    answers = iter(["7", "1", "y"])  # main 7 = Safe uninstall, 1 = standard, y = explicit consent
     out = io.StringIO()
     ui = UI(stream=out, color=False, force_plain=True, input_fn=lambda p="": next(answers, "0"))
     assert run_tui(host.make_ctx(), ui) == 0

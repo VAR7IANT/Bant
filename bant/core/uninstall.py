@@ -74,7 +74,7 @@ def preflight(ctx: Context) -> dict[str, Any]:
     pend = txm.pending()
     if pend:
         blockers.append(f"An SSH change (transaction {pend[-1].id}) is waiting for confirmation. "
-                        "Finish it first with `sudo bant ssh confirm` (after logging in on the new port) or undo it with `sudo bant ssh rollback`.")
+                        "Finish it first with `sudo bant ssh cf` (after logging in on the new port) or undo it with `sudo bant ssh rollback`.")
         check("pending SSH change", False, pend[-1].id)
     else:
         check("pending SSH change", True, "none")

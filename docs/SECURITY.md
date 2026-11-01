@@ -10,10 +10,16 @@ invariants it enforces, how they are tested, and what it deliberately does not d
    *first*. If the timer cannot be armed and verified active, nothing is changed.
 2. **Write-ahead recording.** Each file is backed up, and each undo command registered, *before* the
    corresponding forward action; the script is regenerated atomically on every step.
-3. **Confirmation is evidence, not assertion.** `bant ssh confirm` scans `/proc` for an
-   *authenticated* `sshd` session whose socket's local port is the new port, that started after
-   the transaction began, from a non-local peer. Environment variables (`SSH_CONNECTION`) are never
-   trusted. For "password off" it additionally requires a matching `Accepted publickey` log entry.
+3. **Confirmation is evidence, not assertion.** `bant ssh cf` walks the process tree in `/proc` from
+   its own process up to the *authenticated* `sshd` session it runs in, and requires that session's
+   socket (kernel socket table) to be on the new port, to have started after the transaction began,
+   and to come from a non-local peer. Environment variables (`SSH_CONNECTION`) are never trusted. For
+   "password off" it additionally requires a matching `Accepted publickey` log entry for that session.
+   It confirms only the single pending change and refuses expired or conflicting transactions. Where
+   the current terminal cannot be verified (provider console, `su`, `tmux`), the explicit
+   `--other-session` alternative accepts a separate session meeting the same requirements, but only
+   after showing it and asking (Enter is "no"; non-interactive use needs `--yes`). The legacy
+   `bant ssh confirm` keeps its 0.1.2 rule (any qualifying new session).
 4. **Effective configuration is verified, not assumed.** After each change `sshd -T` (and
    `fail2ban-client -d`) is compared to the request. Because OpenSSH is first-value-wins, a shadowed
    directive is detected, the change reverted, and the offending `file:line` reported.

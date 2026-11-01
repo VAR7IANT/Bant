@@ -1,9 +1,17 @@
 # Command reference
 
 `bant` with no arguments opens the interactive menu on a terminal (read-only unless run as root) and
-prints `bant status` otherwise. The menu has six entries - **1 Security overview, 2 One-click protection,
-3 SSH management, 4 Firewall & bans, 5 Maintenance & settings, 6 Safe uninstall** - and every action in it
-calls the same code as the commands below. Global options work before or after the command, and every
+prints `bant status` otherwise. The menu has seven entries - **1 Security overview, 2 One-click protection,
+3 SSH management, 4 Firewall & bans, 5 Maintenance & settings, 6 Language, 7 Safe uninstall** - and every
+action in it calls the same code as the commands below.
+
+**How the menu behaves.** Everything is printed in place, in the normal terminal output: no alternate screen,
+no clearing, no full-screen redraw, so results and errors stay in the scrollback and can be copied. Every menu
+uses the same prompt: type a number to open an entry; press **Enter** on an empty line to go back one level
+(on the main menu: to exit Bant). An unknown answer is reported and asked again. In a prompt that needs a
+value (a port, an IP, a duration ...) Enter cancels the action. Yes/no questions in the menu treat Enter as
+**no** - risky actions (uninstall, turning password login off, firewall changes, ...) only run after an
+explicit `y`. Ctrl+C / Ctrl+D cancel the current step without a traceback. Global options work before or after the command, and every
 one of them may be left out (an omitted option simply has its default):
 
 | Option | Meaning |
@@ -12,7 +20,7 @@ one of them may be left out (an omitted option simply has its default):
 | `--dry-run` | show what would change; nothing is modified |
 | `-y`, `--yes` | assume "yes" for confirmations (required when stdin is not a terminal) |
 | `--no-color` | plain output (also honoured: `NO_COLOR`, `TERM=dumb`, non-tty) |
-| `--lang en\|zh` | interface language for this run (`BANT_LANG` does the same); `--json` output is always English |
+| `--lang zh-CN\|zh-TW\|en` | interface language for this run (`BANT_LANG` does the same); `--json` output is always English |
 
 Read-only commands work without root: `version status doctor audit logs ssh status fail2ban status
 firewall status updates status backup --list`. Everything that changes the system requires root
@@ -38,7 +46,7 @@ and fails with exit code 3 *before* doing anything otherwise.
 | Command | Purpose |
 |---|---|
 | `bant version` | print version |
-| `bant lang [en\|zh]` | show or set the interface language (English / 繁體中文); root sets it system-wide, others set a personal preference |
+| `bant lang [zh-CN\|zh-TW\|en]` | choose the interface language: 简体中文 (`zh-CN`), 繁體中文 (`zh-TW`) or English (`en`). Without a code it shows a picker (on a terminal) or the current setting. Applies immediately; root saves it system-wide, others as a personal preference. The legacy code `zh` (Bant <= 0.1.2) means `zh-TW`. On first start the system locale decides (`zh_CN`/`zh_SG` -> zh-CN, `zh_TW`/`zh_HK` -> zh-TW), otherwise English |
 | `bant status [--deep]` | SSH port/auth, Fail2ban, firewall, bans, findings; `--deep` adds update and log checks |
 | `bant doctor` | deep diagnostics, separating *installed / running / verified / misconfigured / unavailable* |
 | `bant audit [--fail-on SEV] [--quiet-info]` | findings with evidence, impact, recommendation, fixability |
@@ -51,7 +59,9 @@ and fails with exit code 3 *before* doing anything otherwise.
 | `bant ssh` / `bant ssh status` | listeners, activation mode, effective auth settings, Match overrides, pending change |
 | `bant ssh port` | show current port(s) |
 | `sudo bant ssh port N\|random [--minutes N]` | start the safe migration to port N, or to a random free port (see INSTALL.md) |
-| `sudo bant ssh confirm` | after logging in through the **new** path: verify server-side, then finalise |
+| `sudo bant ssh cf` | **run inside the new connection** after a port or auth change: Bant finds the one pending change by itself (no ID or token to copy), proves on the server that *this* session is a new login through the new port (process tree + kernel socket table, not environment variables), then finalises: old listener and Fail2ban ports narrowed, rollback timer disarmed. Refuses when nothing is pending, when the deadline has passed, when several changes conflict, or when this session is the old one |
+| `sudo bant ssh cf --other-session` | for a provider console (or `su`/`tmux`) where the current terminal cannot be verified: accepts a *separate* verified new session on the new port as proof, after showing it and asking (`--yes` for scripts) |
+| `sudo bant ssh confirm` | legacy form (Bant <= 0.1.2), kept for scripts: accepts any verified new session as proof |
 | `sudo bant ssh rollback` | undo a pending change now |
 | `sudo bant ssh extend [MIN]` | push the rollback deadline out |
 | `sudo bant ssh password on\|off` | password login. `off` needs a verified public-key login, a usable `AuthenticationMethods`, runs under rollback and needs a confirmed new key session |

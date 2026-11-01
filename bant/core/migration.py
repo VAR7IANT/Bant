@@ -49,7 +49,7 @@ def plan(ctx: Context, target: int) -> PortPlan:
     if not has_systemd(ctx):
         p.blockers.append("systemd is required for automatic rollback.")
     if st.pending_tx:
-        p.blockers.append(f"SSH transaction {st.pending_tx} is still pending - run `bant ssh confirm` or `bant ssh rollback`.")
+        p.blockers.append(f"SSH transaction {st.pending_tx} is still pending - run `bant ssh cf` or `bant ssh rollback`.")
     if st.config_valid is False:
         p.blockers.append(f"Current SSH configuration is invalid: {st.config_error}")
     if st.mode == "socket" and not st.socket_unit:
@@ -83,7 +83,7 @@ def plan(ctx: Context, target: int) -> PortPlan:
         f"Make Fail2ban protect ports {sorted(set(p.old_ports + [target]))}",
         f"Configure sshd to listen on {sorted(set(p.old_ports + [target]))} ({'ssh.socket drop-in' if st.mode == 'socket' else 'sshd_config.d/00-bant.conf'})",
         f"Verify TCP {target} accepts SSH connections",
-        f"Wait for you to log in on port {target} and run `bant ssh confirm`",
+        f"Wait for you to log in on port {target} and run `bant ssh cf`",
         f"Then remove the old listener(s) {[x for x in p.old_ports if x != target]}",
     ]
     return p
@@ -209,27 +209,104 @@ def verify_new_session(ctx: Context, tx: Transaction) -> tuple[bool, str, netinf
     msg = "\n".join([
         f"No authenticated SSH session {where} that started after this change was found on the server.",
         f"  1. Open a NEW terminal and connect {how}.",
-        "  2. Keep it open and run `sudo bant ssh confirm` again (from either session).",
+        "  2. Keep it open and run `sudo bant ssh cf` in that new session.",
         "  If the new connection times out, a provider/cloud firewall may be blocking the port; "
         "allow it there, or run `sudo bant ssh rollback`.",
     ])
     return False, msg, None
 
 
-def confirm(ctx: Context) -> dict[str, Any]:
+class NotInSshSession(OperationFailed):
+    """`bant ssh cf` was run where the current SSH connection cannot be verified (console, su, screen, ...)."""
+
+
+CONFIRM_MODES = ("current", "other", "any")
+
+
+def confirmable(ctx: Context) -> Transaction:
+    """The single SSH change that may be confirmed now - or a clear refusal (none / expired / conflicting)."""
+    txm = TxManager(ctx)
+    txs = txm.pending()
+    if not txs:
+        last = next(iter(sorted(txm.all(), key=lambda t: t.created, reverse=True)), None)
+        if last is not None and last.status in ("rolled_back", "rollback_failed"):
+            raise OperationFailed(
+                f"The last SSH change ({last.kind}, {last.id}) was already rolled back - its deadline passed or it failed.",
+                hint="Your previous configuration is active. Check `bant logs`, then start again (e.g. `sudo bant ssh port random`).")
+        raise OperationFailed("No SSH change is waiting for confirmation.", hint="Run `bant ssh` to see the current state.")
+    if len(txs) > 1:
+        raise OperationFailed(
+            f"{len(txs)} SSH changes are pending at the same time ({', '.join(t.id for t in txs)}); refusing to guess which one to confirm.",
+            hint="Undo them with `sudo bant ssh rollback` (repeat until none is left) or run `sudo bant repair`, then start again.")
+    tx = txs[0]
+    if tx.seconds_left(ctx.clock()) <= 0:
+        raise OperationFailed(
+            f"The confirmation window of SSH change {tx.id} has expired; the automatic rollback is due and the change can no longer be confirmed.",
+            hint="Finish the rollback now with `sudo bant ssh rollback` (or `sudo bant repair`), then start the change again.")
+    return tx
+
+
+def verify_current_session(ctx: Context, tx: Transaction) -> tuple[bool, str, netinfo.SshSession | None]:
+    """Server-side proof that THIS command runs inside a new SSH session that meets the transaction's requirement.
+
+    The session is found through the process tree in /proc (never from client-controlled variables such as
+    SSH_CONNECTION), and its local port comes from the kernel's socket table.
+    """
+    req = tx.meta.get("require", {})
+    port = req.get("port")
+    sess = netinfo.current_session(ctx)
+    if sess is None:
+        raise NotInSshSession(
+            "This terminal is not an SSH session that Bant can verify (provider console, `su`, `screen`/`tmux` or a "
+            "non-SSH login), so it cannot prove that the new connection works.",
+            hint="Connect through the new path and run `sudo bant ssh cf` there. From a console you can instead confirm "
+                 "with a verified session in another terminal: `sudo bant ssh cf --other-session`.")
+    if port is not None and sess.local_port != port:
+        return False, "\n".join([
+            f"You are connected through TCP port {sess.local_port}, not the new port {port}.",
+            f"  1. Open a NEW terminal and connect: ssh -p {port} {sess.user}@<server-ip>",
+            "  2. Run `sudo bant ssh cf` in that new session.",
+            "  If the new connection times out, a provider/cloud firewall may be blocking the port; "
+            "allow it there, or run `sudo bant ssh rollback`.",
+        ]), None
+    if sess.started < tx.created - 2:
+        return False, "\n".join([
+            "This SSH session was opened before the change, so it does not prove that a new login works.",
+            "  Open a NEW terminal, log in again, and run `sudo bant ssh cf` there.",
+        ]), None
+    if sess.remote_ip in netinfo.local_addresses(ctx):
+        return False, f"This session comes from the server itself ({sess.remote_ip}); log in from your own computer.", None
+    if req.get("method") == "publickey" and sess.pid not in {s.pid for s in ssh.live_pubkey_sessions(ctx, since=tx.created - 2)}:
+        return False, "This session did not log in with an SSH key. Log in with your key in a NEW terminal and run `sudo bant ssh cf` there.", None
+    return True, f"verified: {sess.user} from {sess.remote_ip} via port {sess.local_port} (this session)", sess
+
+
+def check(ctx: Context, mode: str = "current") -> tuple[Transaction, str]:
+    """Verify without changing anything. Returns (transaction, evidence) or raises OperationFailed."""
+    if mode not in CONFIRM_MODES:
+        raise ValueError(mode)
+    tx = confirmable(ctx)
+    if mode == "current":
+        ok, detail, _ = verify_current_session(ctx, tx)
+    else:
+        ok, detail, sess = verify_new_session(ctx, tx)
+        if ok and mode == "other" and sess is not None:
+            detail += " (another session)"
+    if not ok:
+        raise OperationFailed(detail)
+    return tx, detail
+
+
+def confirm(ctx: Context, mode: str = "any") -> dict[str, Any]:
+    """Make the pending SSH change permanent after server-side verification.
+
+    mode "current" (`bant ssh cf`): the session running this command must itself be the new connection.
+    mode "other"   (`bant ssh cf --other-session`, for consoles): another live, new, authenticated session must exist.
+    mode "any"     (legacy `bant ssh confirm`): same evidence as "other".
+    """
     ctx.require_root("Confirming an SSH change")
     with ctx.lock():
-        tx = pending(ctx)
-        if tx is None:
-            last = next(iter(sorted(TxManager(ctx).all(), key=lambda t: t.created, reverse=True)), None)
-            if last is not None and last.status == "rolled_back":
-                raise OperationFailed(
-                    f"The last SSH change ({last.kind}, {last.id}) was already rolled back - its deadline passed or it failed.",
-                    hint="Your previous configuration is active. Check `bant logs`, then start again (e.g. `sudo bant ssh port random`).")
-            raise OperationFailed("No SSH change is waiting for confirmation.", hint="Run `bant ssh` to see the current state.")
-        ok, detail, sess = verify_new_session(ctx, tx)
-        if not ok:
-            raise OperationFailed(detail)
+        tx, detail = check(ctx, mode)
         txm = TxManager(ctx)
         if tx.kind == "ssh-port":
             result = finalize_port(ctx, tx, txm)
@@ -237,7 +314,8 @@ def confirm(ctx: Context) -> dict[str, Any]:
             txm.confirm(tx)
             result = {"kind": tx.kind, "changes": tx.meta.get("changes", {})}
         result["verified"] = detail
-        ctx.audit("ssh.confirmed", tx=tx.id, kind=tx.kind, session=detail)
+        result["tx"] = tx.id
+        ctx.audit("ssh.confirmed", tx=tx.id, kind=tx.kind, session=detail, mode=mode)
         return result
 
 

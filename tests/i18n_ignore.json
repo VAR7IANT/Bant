@@ -1,5 +1,6 @@
 [
 "    rm -f \"$tmp\"; log \"FAILED to restore $2\"; failed=1",
+"   sudo bant ssh cf",
 "  \"$1\" -C INPUT -p \"$2\" --dport \"$3\" -m comment --comment \"$TAG\" -j ACCEPT 2>/dev/null && return 0",
 "  if cp \"$1\" \"$tmp\" && chmod \"$3\" \"$tmp\" && chown \"$4:$5\" \"$tmp\" && mv -f \"$tmp\" \"$2\"; then",
 "  log \"rollback INCOMPLETE: some files could not be restored; run: bant repair (or see docs/RECOVERY.md)\"",

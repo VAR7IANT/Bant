@@ -101,8 +101,9 @@ def test_dry_run_ssh_port_changes_nothing(host):
 
 def test_ssh_port_flow_through_cli(host):
     rc, out = run(host, "ssh", "port", "667", "--yes")
-    assert rc == 0 and "listens on [22, 667]" in out and "ssh confirm" in out
-    rc, out = run(host, "ssh", "confirm")
+    assert rc == 0 and "New SSH port: 667" in out and "Old SSH port kept open for now: 22" in out
+    assert "sudo bant ssh cf" in out and "rolled back automatically" in out and set(host.listening) == {22, 667}
+    rc, out = run(host, "ssh", "confirm")  # the legacy command still works and still needs evidence
     assert rc == 1 and "No authenticated SSH session" in out
     host.add_ssh_session("alice", 667, "203.0.113.7", 50001)
     rc, out = run(host, "ssh", "confirm")
@@ -225,7 +226,7 @@ def test_backup_restore_via_cli(host):
 def test_setup_via_cli_reports_pending_with_random_port(host):
     rc, out = run(host, "setup")
     pend = migration.describe_pending(host.make_ctx())
-    assert rc == 0 and "NOT finished" in out and "ssh confirm" in out
+    assert rc == 0 and "NOT finished" in out and "ssh cf" in out
     assert pend["target"] not in (22, 667) and f"SSH port: {pend['target']}" in out and "random" in out
 
 
@@ -280,16 +281,22 @@ def test_uninstall_dry_run(host):
 def test_tui_starts_and_navigates(host):
     from bant.tui.app import run_tui
     out = io.StringIO()
-    inputs = iter(["3", "", "0", "4", "0", "x", "", "99", "", "q"])
-    ui = UI(stream=out, color=False, force_plain=True, input_fn=lambda p="": next(inputs))
+    # 3 = SSH menu, Enter = back, 4 = firewall menu, x = invalid (asked again), Enter = back, 99 = invalid, Enter = exit
+    inputs = iter(["3", "", "4", "x", "", "99", ""])
+
+    def answer(prompt=""):
+        out.write(prompt + "\n")
+        return next(inputs)
+    ui = UI(stream=out, color=False, force_plain=True, input_fn=answer)
     assert run_tui(host.make_ctx(), ui) == 0
     text = out.getvalue()
     assert "Security status" in text and "SSH MANAGEMENT" in text and "FAIL2BAN" in text
     assert text.count("Unknown option") == 2 and "Goodbye" in text
-    for label in ("Security overview", "One-click protection", "SSH management", "Firewall & bans", "Maintenance & settings", "Safe uninstall"):
+    for label in ("Security overview", "One-click protection", "SSH management", "Firewall & bans", "Maintenance & settings",
+                  "Language", "Safe uninstall"):
         assert label in text
-    menu = [line for line in text.splitlines() if line.strip()[:2].rstrip(".").isdigit()]
-    assert len({line for line in menu if line.strip()[0] in "0123456"}) <= 7 + 20  # main menu: six entries plus Exit
+    assert "Select an option (Enter to exit)" in text and "Select an option (Enter to go back)" in text
+    assert " 0. Back" not in text and " 0. Exit" not in text
 
 
 def test_tui_ctrl_c_exits_cleanly(host):

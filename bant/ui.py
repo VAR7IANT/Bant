@@ -60,6 +60,13 @@ class Abort(Exception):
     """User cancelled (Ctrl+C / Ctrl+D / EOF) at a prompt."""
 
 
+class Cancelled(Abort):
+    """The user left a required value empty (Enter): cancel the current action and go back."""
+
+
+BACK_WORDS = {"0", "b", "q", "back", "quit", "exit"}  # still accepted for muscle memory; the prompt advertises Enter
+
+
 def wants_color(stream: TextIO) -> bool:
     if os.environ.get("NO_COLOR") or os.environ.get("TERM") == "dumb":
         return False
@@ -74,6 +81,10 @@ class UI:
         self.rich = HAVE_RICH and not force_plain
         self.assume_yes = assume_yes
         self._input = input_fn
+        self.menu_mode = False  # interactive menus: an empty answer always means "no / cancel / back"
+        self.force_logo = False  # tests: draw the logo although the stream is not a terminal
+        self.term_size: tuple[int, int] | None = None  # tests: (columns, rows) instead of the real window
+        self._logo_shown = False
         if self.rich:
             self.console = Console(file=self.stream, no_color=not self.color, highlight=False,
                                    force_terminal=self.color or None, color_system="auto" if self.color else None)
@@ -196,9 +207,19 @@ class UI:
             raise Abort from None
         return answer or (default or "")
 
+    def ask_required(self, prompt: str, *, translate: bool = True) -> str:
+        """A value the action cannot do without. Enter (empty) cancels the action instead of guessing a default."""
+        answer = self.ask(f"{tr(prompt) if translate else prompt} ({tr('Enter to cancel')})", translate=False)
+        if not answer:
+            raise Cancelled
+        return answer
+
     def confirm(self, prompt: str, default: bool = False) -> bool:
+        """Yes/no question. In the interactive menus an empty answer is always "no", never consent."""
         if self.assume_yes:
             return True
+        if self.menu_mode:
+            default = False
         hint = "Y/n" if default else "y/N"
         while True:
             answer = self.ask(f"{tr(prompt)} ({hint})", translate=False).lower()
@@ -210,16 +231,44 @@ class UI:
                 return False
             self.text("Please answer yes or no.", "warn")
 
-    def pause(self) -> None:
-        try:
-            self._input("\n" + tr("Press Enter to continue..."))
-        except (EOFError, KeyboardInterrupt):
-            raise Abort from None
+    def select(self, keys: Iterable[str], *, top: bool = False) -> str | None:
+        """The one menu prompt used by every menu.
 
-    def clear(self) -> None:
-        if self.color and getattr(self.stream, "isatty", lambda: False)():
-            self.stream.write("\033[2J\033[H")
-            self.stream.flush()
+        Returns the chosen key, or None for "go back" (Enter, 0/b/q, Ctrl+C or EOF; on the main menu: exit).
+        An unknown answer is reported and asked again without redrawing the menu.
+        """
+        valid = {k.lower() for k in keys}
+        prompt = "Select an option (Enter to exit)" if top else "Select an option (Enter to go back)"
+        while True:
+            try:
+                answer = self.ask(prompt).strip().lower()
+            except Abort:
+                return None
+            if not answer or answer in BACK_WORDS and answer not in valid:
+                return None
+            if answer in valid:
+                return answer
+            self.warn(f"Unknown option '{answer}'. Type a number from the list, or press Enter to go back."
+                      if not top else f"Unknown option '{answer}'. Type a number from the list, or press Enter to exit.")
+
+    # ---- logo --------------------------------------------------------------
+    @property
+    def interactive(self) -> bool:
+        return bool(getattr(self.stream, "isatty", lambda: False)()) and sys.stdin.isatty()
+
+    def logo(self, *, once: bool = True) -> None:
+        """The BANT block-letter banner, for people at a terminal only (never in pipes, scripts or --json)."""
+        from bant import logo
+
+        if (once and self._logo_shown) or not (self.interactive or self.force_logo):
+            return
+        self._logo_shown = True
+        import shutil
+
+        cols, rows = self.term_size or tuple(shutil.get_terminal_size((80, 0)))
+        art = logo.render(cols, color=self.color, rich=logo.rich_color() or self.force_logo, unicode=self.unicode, height=rows)
+        self.stream.write("\n" + art)
+        self.stream.flush()
 
 
 _CJK = re.compile(r"[\u3000-\u9fff\uff00-\uffef]")
