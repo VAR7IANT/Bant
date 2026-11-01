@@ -364,7 +364,7 @@ def apply(ctx: Context, version: str | None = None, *, allow_downgrade: bool = F
 
     with ctx.lock():
         if TxManager(ctx).pending():
-            raise OperationFailed("An SSH change is waiting for confirmation.", hint="Run `bant ssh confirm` or `bant ssh rollback` first.")
+            raise OperationFailed("An SSH change is waiting for confirmation.", hint="Run `bant ssh cf` or `bant ssh rollback` first.")
         data, verified_by = acquire(ctx, rel)
         stage = ctx.paths.state_dir / "update" / str(rel.version)
         shutil.rmtree(stage, ignore_errors=True)

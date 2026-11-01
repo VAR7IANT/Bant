@@ -50,6 +50,7 @@ from bant.presenters import (
     render_firewall,
     render_logs,
     render_pending,
+    render_port_started,
     render_setup,
     render_ssh,
     render_status,
@@ -88,6 +89,13 @@ class _Parser(argparse.ArgumentParser):
         return super().add_argument_group(tr(title) if title else title, *args, **kwargs)
 
 
+def _lang_arg(value: str) -> str:
+    code = i18n.normalize(value)
+    if code is None:
+        raise argparse.ArgumentTypeError(tr(f"unknown language '{value}'; choose zh-CN, zh-TW or en"))
+    return code
+
+
 def _common() -> argparse.ArgumentParser:
     p = _Parser(add_help=False)
     g = p.add_argument_group("global options")
@@ -96,7 +104,8 @@ def _common() -> argparse.ArgumentParser:
                    help="show what would change without changing anything")
     g.add_argument("-y", "--yes", action="store_true", default=argparse.SUPPRESS, help="assume yes for confirmations")
     g.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS, help="disable colours")
-    g.add_argument("--lang", choices=sorted(i18n.LANGS), default=argparse.SUPPRESS, help="interface language for this run (en, zh)")
+    g.add_argument("--lang", type=_lang_arg, metavar="{zh-CN,zh-TW,en}", default=argparse.SUPPRESS,
+                   help="interface language for this run (zh-CN, zh-TW, en)")
     return p
 
 
@@ -116,8 +125,8 @@ def build_parser() -> argparse.ArgumentParser:
         return sp
 
     add("version", "show the Bant version", cmd_version)
-    p = add("lang", "show or set the interface language (English / 繁體中文)", cmd_lang)
-    p.add_argument("code", nargs="?", choices=sorted(i18n.LANGS), help="en or zh")
+    p = add("lang", "show or choose the interface language (简体中文 / 繁體中文 / English)", cmd_lang)
+    p.add_argument("code", nargs="?", type=_lang_arg, metavar="{zh-CN,zh-TW,en}", help="zh-CN, zh-TW or en (omit to choose from a list)")
     p = add("status", "security overview (read-only)", cmd_status)
     p.add_argument("--deep", action="store_true", help="include slower checks (update simulation, log scans)")
     add("doctor", "deep diagnostics: installed vs running vs verified", cmd_doctor)
@@ -149,7 +158,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sadd("set", "set a hardening option", cmd_ssh_set)
     sp.add_argument("option", choices=sorted(ssh.OPTION_SPECS))
     sp.add_argument("value")
-    sadd("confirm", "confirm a pending SSH change after logging in through the NEW path", cmd_ssh_confirm)
+    sp = sadd("cf", "confirm the pending SSH change from the NEW connection (verified on the server)", cmd_ssh_cf)
+    sp.add_argument("--other-session", action="store_true",
+                    help="for a provider console: accept a verified new session in another terminal as proof (asks first)")
+    sadd("confirm", "legacy form of `bant ssh cf`: accepts any verified new session as proof", cmd_ssh_confirm)
     sadd("rollback", "undo a pending SSH change now", cmd_ssh_rollback)
     sp = sadd("extend", "extend the rollback deadline", cmd_ssh_extend)
     sp.add_argument("minutes", nargs="?", type=int, default=10)
@@ -310,21 +322,32 @@ def _json_default(obj: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 def cmd_version(args, ctx, ui) -> int:
+    if not getattr(args, "json", False):
+        ui.logo()  # people at a terminal only; `bant version | cat` still prints exactly one line
     emit(args, ui, {"name": "bant", "version": __version__}, lambda: ui.text(f"bant {__version__}", raw=True))
     return EX_OK
 
 
 def cmd_lang(args, ctx, ui) -> int:
     if args.code is None:
+        interactive = sys.stdin.isatty() and not getattr(args, "json", False)
+        if interactive and getattr(ui.stream, "isatty", lambda: False)():
+            from bant.tui.menus import choose_language
+
+            ui.menu_mode = True
+            choose_language(ctx, ui)
+            return EX_OK
         code, source = i18n.resolve(ctx)
         shown = code or i18n.locale_hint() or i18n.DEFAULT
-        emit(args, ui, {"language": shown, "source": source},
+        emit(args, ui, {"language": shown, "source": source, "available": list(i18n.LANGS)},
              lambda: ui.kv([("Language", f"{i18n.LANGS[shown]} ({shown})", "ok"), ("Chosen via", source, None)]))
         return EX_OK
     where = i18n.save(ctx, args.code)
-    i18n.set_language(args.code if stream_shows_cjk(ui.stream) or args.code == "en" else "en")
+    shown = i18n.apply(args.code, ui.stream)
     emit(args, ui, {"language": args.code, "saved": where},
-         lambda: ui.success("Language set to English." if args.code == "en" else "語言已設定為繁體中文。"))
+         lambda: (ui.success(f"Language set to {i18n.LANGS[shown]}."),
+                  ui.warn("This terminal does not look UTF-8, so Chinese would be garbled; showing English. "
+                          "Use a UTF-8 terminal (e.g. LANG=C.UTF-8).") if shown != args.code else None))
     return EX_OK
 
 
@@ -413,12 +436,7 @@ def cmd_ssh_port(args, ctx, ui) -> int:
         emit(args, ui, {"dry_run": True, "port": port, "port_source": source, "planned": ctx.planned}, lambda: _plan_footer(ctx, ui))
         return EX_OK
     out = migration.begin(ctx, port, minutes=args.minutes)
-
-    def human() -> None:
-        ui.success(f"SSH now listens on {sorted(set(out['old_ports'] + [out['target']]))}. Firewall: {out['firewall']}")
-        render_pending(ui, migration.describe_pending(ctx))
-        ui.text(f"\n Example: {migration.login_hint(ctx, port)}")
-    emit(args, ui, out, human)
+    emit(args, ui, out, lambda: render_port_started(ui, out, migration.login_hint(ctx, port), ctx.clock()))
     return EX_OK
 
 
@@ -431,7 +449,7 @@ def _report_change(args, ctx, ui, result: dict[str, Any]) -> int:
         for w in result.get("warnings", []):
             ui.warn(w)
         if result.get("pending"):
-            ui.warn("This change is TEMPORARY until verified. Open a NEW SSH session using your key, then run: sudo bant ssh confirm")
+            ui.warn("This change is TEMPORARY until verified. Open a NEW SSH session using your key, then run: sudo bant ssh cf")
             render_pending(ui, migration.describe_pending(ctx))
         _plan_footer(ctx, ui)
     emit(args, ui, result, human)
@@ -462,9 +480,26 @@ def cmd_ssh_set(args, ctx, ui) -> int:
     return _report_change(args, ctx, ui, ssh.set_option(ctx, args.option, args.value))
 
 
-def cmd_ssh_confirm(args, ctx, ui) -> int:
-    out = migration.confirm(ctx)
+def cmd_ssh_cf(args, ctx, ui) -> int:
+    """`bant ssh cf`: find the one pending change, prove THIS session is the new connection, then finalise."""
+    ctx.require_root("Confirming an SSH change")
+    if not args.other_session:
+        return _confirmed(args, ui, migration.confirm(ctx, "current"))
+    _tx, evidence = migration.check(ctx, "other")
+    if not getattr(args, "json", False):
+        ui.warn("This terminal is not used as proof. Bant found this separate new session instead:")
+        ui.text(f"   {evidence}", raw=True)
+    if not _need_confirm(args, ui, "Is that session yours, and does it work? Confirm the change with it", False):
+        ui.warn("Cancelled. Nothing was changed; the automatic rollback stays armed.")
+        return EX_ERROR
+    return _confirmed(args, ui, migration.confirm(ctx, "other"))
 
+
+def cmd_ssh_confirm(args, ctx, ui) -> int:
+    return _confirmed(args, ui, migration.confirm(ctx, "any"))
+
+
+def _confirmed(args, ui: UI, out: dict[str, Any]) -> int:
     def human() -> None:
         ui.success(f"Confirmed: {out['verified']}")
         if out.get("kind") == "ssh-port":
@@ -699,8 +734,12 @@ def cmd_repair(args, ctx, ui) -> int:
     return EX_ERROR if any("FAILED" in a["result"] for a in actions) else EX_OK
 
 
-def _ask_ssh_port(ctx: Context, ui: UI) -> int | None:
-    """Interactive installs: show the random port Bant would use and let the user accept, change or reroll it."""
+def _ask_ssh_port(ctx: Context, ui: UI, *, enter_cancels: bool = False) -> int | None:
+    """Interactive installs: show the random port Bant would use and let the user accept, change or reroll it.
+
+    In the menus (enter_cancels=True) Enter cancels, like everywhere else there; the random port is accepted
+    with 'y'. The installer keeps "Enter accepts the shown port", which its own screen explains.
+    """
     try:
         candidate, source = ports.resolve_target(ctx, None)
     except ports.NoFreePort as exc:
@@ -709,7 +748,7 @@ def _ask_ssh_port(ctx: Context, ui: UI) -> int | None:
         ui.info(" Type the SSH port you want to use (for example 667).")
         while True:
             try:
-                return parse_port(ui.ask("SSH port"))
+                return parse_port(ui.ask_required("SSH port") if enter_cancels else ui.ask("SSH port"))
             except ValidationError as err:
                 ui.error(err.message)
     if source not in ("random", "remembered"):
@@ -718,10 +757,15 @@ def _ask_ssh_port(ctx: Context, ui: UI) -> int | None:
     ui.text(f" Bant will move SSH to a random free port: {candidate}")
     if ports.random_strategy(ctx, candidate) == "ephemeral":
         ui.warn(" This server's outgoing-connection port range covers every usual choice; this port was checked to be completely unused.")
-    ui.info(" Press Enter to accept, type your own port number, or 'r' for another random port.")
+    if enter_cancels:
+        ui.info(" Type 'y' to accept, your own port number (e.g. 667), 'r' for another random port, or Enter to cancel.")
+    else:
+        ui.info(" Press Enter to accept, type your own port number, or 'r' for another random port.")
     ui.info(" Remember to allow that port in your VPS provider's firewall/security group, if it has one.")
     while True:
-        answer = ui.ask("SSH port", str(candidate)).strip().lower()
+        answer = (ui.ask_required("SSH port") if enter_cancels else ui.ask("SSH port", str(candidate))).strip().lower()
+        if enter_cancels and answer in ("y", "yes", "是", "好"):
+            return candidate
         if answer in ("r", "random"):
             try:
                 candidate = ports.pick_random(ctx, exclude=[candidate])
@@ -932,7 +976,7 @@ def _startup_language(argv: Sequence[str], ctx: Context, stream) -> str:
     if "--json" in argv:
         return "en"  # machine-readable output is always English
     try:
-        code, _ = i18n.resolve(ctx, _flag_value(argv, "--lang"))
+        code, _ = i18n.resolve(ctx, i18n.normalize(_flag_value(argv, "--lang") or ""))
     except BantError:
         code = None
     code = code or i18n.locale_hint() or i18n.DEFAULT
@@ -977,6 +1021,8 @@ def main(argv: Sequence[str] | None = None, ctx: Context | None = None, ui: UI |
     ctx = ctx or Context(interactive=sys.stdin.isatty())
     i18n.set_language(_startup_language(argv_list, ctx, ui.stream if ui else sys.stdout))
     parser = build_parser()
+    if argv_list in (["-h"], ["--help"]):
+        (ui or UI()).logo()  # interactive help gets the same banner as the menu; pipes get plain argparse text
     try:
         args = parser.parse_args(argv_list)
     except SystemExit as exc:  # argparse exits 0 for --help/--version, 2 for usage errors

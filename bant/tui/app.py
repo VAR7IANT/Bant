@@ -1,4 +1,9 @@
-"""Interactive terminal UI main loop (0.1.2: six entries, details live in submenus)."""
+"""Interactive menu main loop.
+
+Everything is printed in place, in the normal terminal output stream: no alternate screen, no clearing,
+no full-screen redraws. Output and errors stay in the scrollback and can be copied. Every menu uses the same
+prompt (`UI.select`): a number opens an entry, Enter goes back (on this main menu: exits Bant).
+"""
 
 from __future__ import annotations
 
@@ -13,49 +18,38 @@ MAIN_ITEMS = [
     ("3", "SSH management", menus.ssh_menu),
     ("4", "Firewall & bans", menus.firewall_bans_menu),
     ("5", "Maintenance & settings", menus.maintenance_menu),
-    ("6", "Safe uninstall", menus.uninstall_menu),
+    ("6", "Language", menus.language_menu),
+    ("7", "Safe uninstall", menus.uninstall_menu),
 ]
-DIRECT = {"2"}  # screens that print and return (need a pause); others are menus that pause themselves
+REFRESH = "r"  # not advertised in the menu: redraws the status block
 
 
 def run_tui(ctx: Context, ui: UI) -> int:
     table = {k: fn for k, _, fn in MAIN_ITEMS}
+    ui.menu_mode = True
     try:
         if i18n.resolve(ctx)[0] is None:
             menus.choose_language(ctx, ui, first_run=True)
+        ui.logo()
+        dashboard.draw(ctx, ui)
+        first = True
         while True:
-            ui.clear()
-            dashboard.draw(ctx, ui)
-            ui.menu([(k, label) for k, label, _ in MAIN_ITEMS] + [("0", "Exit")])
-            ui.rule()
-            try:
-                choice = ui.ask("Select an option").strip().lower()
-            except Abort:
+            if not first:
+                ui.section("Main menu")
+            first = False
+            ui.menu([(k, label) for k, label, _ in MAIN_ITEMS])
+            choice = ui.select([*table, REFRESH], top=True)
+            if choice is None:
                 break
-            if choice in ("0", "q", "quit", "exit"):
-                break
-            if choice in ("r", ""):
-                continue
-            if choice in ("?", "h", "help"):
-                ui.text(" Type a number and press Enter. 'r' refreshes, '0' or 'q' exits, Ctrl+C cancels the current screen.")
-                ui.pause()
-                continue
-            fn = table.get(choice)
-            if fn is None:
-                ui.warn(f"Unknown option '{choice}'. Type a number from the list.")
-                ui.pause()
+            if choice == REFRESH:
+                dashboard.draw(ctx, ui)
+                first = True
                 continue
             try:
-                menus.guarded(fn)(ctx, ui)
-                if choice in DIRECT:
-                    ui.pause()
+                menus.guarded(table[choice])(ctx, ui)
             except Abort:
                 continue
             except menus.UninstallDone:
-                try:
-                    ui.pause()
-                except Abort:
-                    pass
                 return 0
     except (Abort, KeyboardInterrupt, EOFError):
         ui.text("")

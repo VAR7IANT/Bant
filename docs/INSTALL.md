@@ -75,13 +75,36 @@ after an interrupted or rolled-back attempt proposes the same port.
 | 5 | Update Fail2ban to protect old+new port, validate with `fail2ban-client -t` | automatic rollback |
 | 6 | Configure sshd (drop-in `00-bant.conf`, or an `ssh.socket` drop-in), `sshd -t`, reload | automatic rollback |
 | 7 | Verify the new port listens and answers with an SSH banner; old port still listens | automatic rollback |
-| 8 | **You** log in on the new port from a new terminal and run `sudo bant ssh confirm` | timer rolls back |
-| 9 | Server-side check that a new, authenticated, non-local session arrived on the new port after step 3 | stays pending |
+| 8 | **You** log in on the new port from a new terminal and, in that session, run `sudo bant ssh cf` | timer rolls back |
+| 9 | Server-side check that *the session running the command* is a new, authenticated, non-local session on the new port that started after step 3 (no ID or token to type) | stays pending |
 | 10 | Remove old listener (comment-out `Port` lines Bant didn't write), narrow Fail2ban, verify | automatic rollback |
 | 11 | Disarm timer; record rules Bant created; mark migration complete | - |
 
-Commands while a migration is pending: `bant status`, `sudo bant ssh confirm`,
+Commands while a migration is pending: `bant status`, `sudo bant ssh cf`,
 `sudo bant ssh rollback`, `sudo bant ssh extend 10`.
+
+What you see after `sudo bant ssh port 667`:
+
+```text
+✔ New SSH port: 667
+✔ New port is listening and answers as SSH
+✔ Firewall: Opened TCP 667 in ufw
+✔ Old SSH port kept open for now: 22
+
+ Reconnect to the server through the new port:
+   ssh -p 667 alice@<server-ip>
+ Once connected, run in that new session:
+   sudo bant ssh cf
+
+! Without confirmation the change is rolled back automatically at 2026-11-01 12:10:00 (in 10 min).
+```
+
+`sudo bant ssh cf` refuses - and changes nothing - when no change is pending, when the deadline has passed
+(finish with `sudo bant ssh rollback`), when several changes are pending at once, or when it runs in the
+old session, a session opened before the change, or a session from the server itself. **From the provider's
+web console** (not an SSH session, so it cannot be verified) use `sudo bant ssh cf --other-session`: Bant
+shows the separate verified new session it found on the new port and asks before using it as proof. The
+old `sudo bant ssh confirm` still works for existing scripts.
 
 **Provider firewalls.** Cloud security groups are outside the server's view. Allow the new TCP port there
 *before* confirming. If you forget, the new login times out and the rollback restores access.
@@ -91,10 +114,13 @@ Commands while a migration is pending: `bant status`, `sudo bant ssh confirm`,
 
 ## Language
 
-The first time you open the menu (`sudo bant`) Bant asks which language to use - **English** or **繁體中文** - and remembers it
-(`/etc/bant/bant.toml` when run as root, otherwise a personal preference in `~/.config/bant/language`). Change it later from menu item
-12, with `sudo bant lang zh|en`, or for one run with `--lang zh` / `BANT_LANG=zh`. `--json` output is always English. On a terminal that
-is not UTF-8 (e.g. the Linux text console, `TERM=linux`) Bant shows English instead of garbled characters.
+The first time you open the menu (`sudo bant`) Bant asks which language to use - **简体中文** (`zh-CN`), **繁體中文** (`zh-TW`) or
+**English** (`en`); Enter takes the language of the system locale (`zh_CN`/`zh_SG` -> zh-CN, `zh_TW`/`zh_HK`/`zh_MO` -> zh-TW,
+otherwise English). The choice is remembered (`/etc/bant/bant.toml` when run as root, otherwise a personal preference in
+`~/.config/bant/language`). Change it later from main menu item 6, with `sudo bant lang` (picker) or `sudo bant lang zh-CN|zh-TW|en`,
+or for one run with `--lang zh-CN` / `BANT_LANG=zh-CN`. The switch applies at once. A saved `zh` from Bant 0.1.2 keeps meaning
+Traditional Chinese. `--json` output is always English. On a terminal that is not UTF-8 (e.g. the Linux text console, `TERM=linux`)
+Bant shows English instead of garbled characters.
 
 ## Upgrade
 
@@ -129,7 +155,7 @@ sudo bant uninstall --purge    # full removal of Bant's own data as well
 Or from the menu: **6 Safe uninstall** -> 1 standard / 2 full removal / 3 preview.
 
 Before anything changes Bant checks your SSH session, that sshd's configuration is valid and listening,
-and that no SSH change is waiting for confirmation (if one is, it refuses and tells you to `ssh confirm`
+and that no SSH change is waiting for confirmation (if one is, it refuses and tells you to `ssh cf`
 or `ssh rollback` - it never finishes or breaks a migration for you). Then it takes a backup; if that is
 impossible it stops without changing anything.
 

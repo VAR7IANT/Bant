@@ -37,7 +37,8 @@ The installer installs Bant, registers `/usr/local/bin/bant`, installs and confi
 1. SSH listens on the old port **and** the new one; the firewall allows it; Fail2ban protects both.
    The installer prints the chosen port - note it, and allow it in your provider's firewall if it has one.
 2. Open a **new** terminal: `ssh -p <new-port> you@your-server`
-3. Run `sudo bant ssh confirm`. Bant verifies that new session on the server, removes the old
+3. In that new session run **`sudo bant ssh cf`** (`cf` = confirm). Bant finds the pending change by
+   itself, proves on the server that *this* session arrived through the new port, removes the old
    listener, narrows Fail2ban to the new port and disarms the rollback timer.
 
 If you do nothing, everything reverts after ~10 minutes. If a provider/cloud firewall blocks the new port,
@@ -46,24 +47,39 @@ the new connection simply times out and the rollback restores the original state
 
 ## Use
 
-`sudo bant` opens a short menu that also fits a phone SSH client:
+`sudo bant` opens a short menu that also fits a phone SSH client. It prints in place - no screen
+switching, no clearing - so every result and error stays in your scrollback:
 
 ```text
- BANT v0.1.2 - Linux VPS Security Manager
- Security status   • Secure
- SSH port          48213
- Password login    off
- Fail2ban          running (verified)
- Firewall          nftables
+  ██████╗  █████╗ ███╗   ██╗████████╗
+  ██╔══██╗██╔══██╗████╗  ██║╚══██╔══╝
+  ██████╔╝███████║██╔██╗ ██║   ██║
+  ██╔══██╗██╔══██║██║╚██╗██║   ██║
+  ██████╔╝██║  ██║██║ ╚████║   ██║
+  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝
+         Support by VAR7IANT
+               v0.1.2
+ Linux VPS Security Manager
+ Security status  • Secure
+ SSH port         48213
+ Password login   off
+ Fail2ban         Active (verified)
+ Firewall         nftables
  ────────────────────────────────
   1. Security overview        summary first, full diagnostics on request
   2. One-click protection     the whole safe setup; repeatable ("already enabled")
   3. SSH management           port, password login, keys, root login, confirm / roll back
   4. Firewall & bans          Fail2ban, banned IPs, trusted list, open ports, advanced
-  5. Maintenance & settings   Bant update, OS updates, backups, logs, repair, language
-  6. Safe uninstall           standard / full removal / preview
-  0. Exit
+  5. Maintenance & settings   Bant update, OS updates, backups, logs, repair
+  6. Language                 简体中文 / 繁體中文 / English
+  7. Safe uninstall           standard / full removal / preview
+Select an option (Enter to exit):
 ```
+
+Type a number to open an entry; **Enter goes back** one level (on the main menu it exits). In a prompt
+that needs a value, Enter cancels; risky actions need an explicit `y` - Enter is never consent. The logo
+is shown only on a real terminal; narrow windows get a one-line `BANT v0.1.2 · Support by VAR7IANT`
+title, and pipes, scripts and `--json` get no banner at all.
 
 The same actions are available as commands (scripts written for 0.1.x keep working):
 
@@ -76,12 +92,15 @@ sudo bant fail2ban ban <IP>    ban / unban, trusted IPs, jail tuning
 sudo bant firewall allow 8443  Bant-owned, removable allowances
 sudo bant backup | restore | repair | uninstall [--dry-run|--purge]
 sudo bant fail2ban conflicts   your [sshd] settings vs Bant's: duplicates, real conflicts, keep or adopt
-sudo bant lang en|zh           English / 繁體中文 (asked the first time you open the menu)
+sudo bant ssh cf               confirm a pending SSH change - run it inside the NEW connection
+sudo bant lang zh-CN|zh-TW|en  简体中文 / 繁體中文 / English (picker without a code)
 sudo bant self-update          update Bant itself from a newer GitHub release (check / apply / rollback)
 ```
 
-The interface is bilingual (English and Traditional Chinese). The first time you open the menu Bant asks
-which language you want and remembers it; `--json` output is always English.
+The interface speaks **简体中文 (zh-CN), 繁體中文 (zh-TW) and English (en)**. The first time you open the
+menu Bant asks (Enter picks the language of your system locale, or English) and remembers the choice;
+switch any time with `bant lang` or menu item 6 - it applies immediately. The old code `zh` still means
+Traditional Chinese. `--json` output is always English.
 
 **Updating Bant.** From 0.1.1 on, `sudo bant self-update` checks GitHub Releases, verifies the download
 (release `SHA256SUMS`, or the tag's commit), installs it and keeps the previous version for

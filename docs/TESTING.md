@@ -30,7 +30,9 @@ console access. Record results in the release notes before tagging anything stab
 - [ ] Re-run `install.sh`: no duplicate rules/units/directives; still one transaction
 
 **Migration**
-- [ ] New session `ssh -p <PORT>` works; `sudo bant ssh confirm` succeeds; 22 stops listening; existing sessions survive
+- [ ] `sudo bant ssh cf` in the OLD session is refused ("not the new port"); nothing changes
+- [ ] New session `ssh -p <PORT>` works; `sudo bant ssh cf` in it succeeds; 22 stops listening; existing sessions survive
+- [ ] From the provider console `sudo bant ssh cf` is refused and `sudo bant ssh cf --other-session` asks before confirming
 - [ ] Same flow on Ubuntu 24.04 with `ssh.socket` (socket drop-in) and on a host with a custom `Port 2222`
 - [ ] Do nothing for the deadline: SSH returns to the original state; repeat with `kill -9` of the installer and with a reboot before the deadline
 - [ ] Provider firewall closed on the new port: confirm fails, rollback restores
@@ -49,7 +51,8 @@ console access. Record results in the release notes before tagging anything stab
 - [ ] An existing custom jail and `jail.local` are untouched; conflicting `[sshd]` keys are reported
 
 **Language and updates**
-- [ ] First `sudo bant` asks for a language; choosing 繁體中文 persists and every menu/screen is Chinese; `sudo bant lang en` switches back
+- [ ] First `sudo bant` asks for a language (简体中文 / 繁體中文 / English); the choice persists and every menu/screen uses it; `sudo bant lang en` switches back
+- [ ] The menu never clears the screen; Enter goes back in every submenu and exits on the main menu; the BANT logo renders in Windows Terminal, PowerShell (ssh.exe) and a Linux terminal, and a narrow window shows the one-line title
 - [ ] Over SSH with a UTF-8 terminal the box drawing and Chinese text render correctly; on the provider's text console (`TERM=linux`) Bant shows English
 - [ ] After publishing a newer release: `bant self-update check` sees it, the dashboard shows the banner after the daily timer ran,
       `sudo bant self-update` installs it, `bant version` shows the new number, `self-update rollback` returns to the old one

@@ -3,9 +3,10 @@
 ```
 bant/
   cli.py            argparse CLI; thin: parse -> core call -> presenter
-  ui.py             Rich/plain output primitives, prompts (case-insensitive y/n)
+  ui.py             Rich/plain output primitives, the one menu prompt (UI.select: number / Enter = back), y/n prompts
+  logo.py           BANT block-letter logo (Rout's design language), compact fallback
   presenters.py     data -> screens (shared by CLI and TUI)
-  tui/              dashboard + menus + loop; every action calls the same core functions
+  tui/              dashboard + menus + loop, printed in place (no alternate screen, no clearing); same core functions
   context.py        Context: Paths(root), Runner, Config, State, AuditLog, dry-run, lock
   constants.py      Paths dataclass (everything resolves under an optional root => testable)
   config.py         /etc/bant/bant.toml (defaults, validation, versioned migration)
@@ -27,8 +28,9 @@ bant/
     f2b_conflicts.py  administrator [sshd] settings vs Bant's jail: analyse, keep, adopt (backup/verify/restore)
     uninstall.py    preflight checks, journalled changes, post-verification, program removed last
     ports.py        SSH port choice: requested / existing / remembered / random (outside the ephemeral range)
-  i18n.py           language selection + output-boundary translator (English source text, zh catalog)
-  locales/zh_tw.py  Traditional Chinese message catalog (~1100 entries)
+  i18n.py           language selection (zh-CN / zh-TW / en, legacy "zh") + output-boundary translator
+  locales/zh_cn.py  Simplified Chinese message catalog (same keys as zh_tw.py)
+  locales/zh_tw.py  Traditional Chinese message catalog (~1400 entries)
   utils/            commands (Runner), fsutil (atomic IO), logging (audit), validation, tomlio
 scripts/emergency-recovery.sh   POSIX sh, no Python
 systemd/bant-firewall.service   oneshot boot re-apply of Bant-owned firewall state
@@ -77,7 +79,8 @@ disarms its own timer and notifies Bant for bookkeeping.
 
 ## Internationalisation
 
-Source messages stay plain English strings/f-strings. `i18n.tr()` translates at the *output boundary* (UI methods, error printing):
+Three interface languages: English (the source text), Simplified Chinese (`zh-CN`) and Traditional Chinese (`zh-TW`); each Chinese
+language has its own catalog with identical keys, so one page never mixes the two scripts. Source messages stay plain English strings/f-strings. `i18n.tr()` translates at the *output boundary* (UI methods, error printing):
 exact match -> template match (catalog keys with `{}` placeholders are matched against the already-formatted text, captured values are
 translated recursively) -> prefix keys (ending in a space) -> per-line -> per-sentence -> unchanged English. A missing translation can
 therefore never break output. Tests keep the catalog honest: an AST scan lists every message-like string in the source and fails if one

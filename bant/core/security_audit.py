@@ -54,7 +54,7 @@ def _ssh_checks(ctx: Context) -> list[Finding]:
     if st.pending_tx:
         out.append(Finding("SSH-002", "high", "An SSH change is waiting for confirmation", f"transaction {st.pending_tx}",
                            "It will be rolled back automatically at its deadline; until then a temporary configuration is live",
-                           "Open a new session and run `sudo bant ssh confirm`, or `sudo bant ssh rollback`.", True, "sudo bant ssh confirm"))
+                           "Open a new session and run `sudo bant ssh cf`, or `sudo bant ssh rollback`.", True, "sudo bant ssh cf"))
     ports = st.active_ports
     if ports == [22]:
         out.append(Finding("SSH-010", "low", "SSH is on the default port 22", "listening on 22",
@@ -287,7 +287,7 @@ def _recovery_checks(ctx: Context) -> list[Finding]:
     pend = migration.describe_pending(ctx)
     if pend and pend["seconds_left"] < 120:
         out.append(Finding("REC-005", "high", "Rollback deadline is very close", f"{pend['seconds_left']}s left",
-                           "SSH will revert momentarily", "Confirm now if the new connection works.", True, "sudo bant ssh confirm"))
+                           "SSH will revert momentarily", "Confirm now if the new connection works.", True, "sudo bant ssh cf"))
     return out
 
 

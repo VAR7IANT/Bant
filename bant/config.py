@@ -85,7 +85,7 @@ class Config:
         if d["update"].get("channel") not in ("auto", "stable", "prerelease"):
             self.problems.append(f"invalid update channel {d['update'].get('channel')!r}; using auto")
             d["update"]["channel"] = "auto"
-        if d["general"].get("language", "") not in ("", "en", "zh"):
+        if d["general"].get("language", "") not in ("", "en", "zh", "zh-CN", "zh-TW"):  # "zh" = Bant <= 0.1.2 (Traditional)
             self.problems.append(f"invalid language {d['general']['language']!r}; ignored")
             d["general"]["language"] = ""
         clean = []
